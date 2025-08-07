@@ -1,0 +1,15 @@
+#!/bin/sh
+# postinst: se ejecuta después de la instalación del paquete.
+
+echo "Recargando systemd..."
+systemctl daemon-reload
+
+echo "Habilitando el servicio mikrotik-manager..."
+systemctl enable mikrotik-manager.service
+
+echo "Iniciando el servicio mikrotik-manager..."
+systemctl start mikrotik-manager.service
+
+echo "La interfaz web debería estar disponible en http://<ip-del-servidor>:8080"
+
+exit 0

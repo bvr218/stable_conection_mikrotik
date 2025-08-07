@@ -23,7 +23,7 @@ class TerminalUI:
         table.add_column("Destino Real", style="green")
         table.add_column("NetFlow", justify="center")
         table.add_column("Estado", style="white")
-        for config in self.app.config_manager.mikrotik_configs:
+        for config in self.app.config_manager.get_mikrotik_configs():
             status_display = self.app.status.get(config['id'], "[yellow]Iniciando...[/yellow]")
             table.add_row(
                 config['id'], 
@@ -92,7 +92,7 @@ class TerminalUI:
             "proxy_port": self.app.config_manager.find_next_available_port(), 
             "enabled": True, "netflow_enabled": netflow_enabled
         }
-        self.app.config_manager.mikrotik_configs.append(new_config)
+        self.app.config_manager.get_mikrotik_configs().append(new_config)
         await self.app.config_manager.save_mikrotik_config()
         await self.app.proxy_server.start_one(new_config)
         await self.app.nfcapd_manager.sync()

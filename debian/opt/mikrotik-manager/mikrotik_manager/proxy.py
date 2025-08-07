@@ -20,7 +20,7 @@ class PersistentConnection:
     async def connect_loop(self):
         while True:
             self.connected.clear()
-            self.status_dict[self.device_id] = f"[yellow]Intentando conectar a {self.config['host']}...[/yellow]"
+            self.status_dict[self.device_id] = f"Intentando conectar a {self.config['host']}..."
             try:
                 # Intenta conexión
                 loop = asyncio.get_running_loop()
@@ -33,7 +33,7 @@ class PersistentConnection:
                 ))
 
                 # Confirmamos conexión
-                self.status_dict[self.device_id] = f"[green]Conectado a MikroTik {self.config['host']}[/green]\n[yellow]Esperando clientes...[/yellow]"
+                self.status_dict[self.device_id] = f"Conectado a MikroTik {self.config['host']}"
                 self.connected.set()
 
                 # Mantén la conexión viva (verifica cada 10s)
@@ -47,7 +47,7 @@ class PersistentConnection:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.status_dict[self.device_id] = f"[red]Error de conexión: {e,self.config}[/red]"
+                self.status_dict[self.device_id] = f"Error de conexión: {e,self.config}"
 
             self.connected.clear()
             self.api = None
@@ -204,50 +204,64 @@ async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict)
                 break
 
             command_buffer_bytes += data
-            
-            # Process buffer as long as there's a null terminator
+
             while b'\x00' in command_buffer_bytes:
                 full_command_bytes, command_buffer_bytes = command_buffer_bytes.split(b'\x00', 1)
-                
-                # Use the generator to parse words from the command bytes
+
                 words = list(parse_api_words(full_command_bytes))
-                
+
                 if not words:
                     continue
 
                 print(f"[API Cliente {client_address}] Palabras procesadas: {words}")
 
-                # Check for the login command
+                # Validar login con usuario/contraseña del dispositivo
                 if not login_confirmed and '/login' in words:
-                    print(f"[API Cliente {client_address}] Login detectado. Respondiendo con éxito simulado.")
-                    
-                    # The simulated success response is correct
-                    response_bytes = b'\x05!done\x00' 
-                    writer.write(response_bytes)
-                    await writer.drain()
-                    login_confirmed = True
-                
+                    print(f"[API Cliente {client_address}] Login detectado. Verificando credenciales...")
+
+                    client_user = None
+                    client_password = None
+
+                    for part in words:
+                        if part.startswith('=name='):
+                            client_user = part.split('=name=')[1]
+                        elif part.startswith('=password='):
+                            client_password = part.split('=password=')[1]
+
+                    expected_user = p_conn.config.get('user')
+                    expected_password = p_conn.config.get('password')
+
+                    if client_user == expected_user and client_password == expected_password:
+                        print(f"[API Cliente {client_address}] Login exitoso.")
+                        response_bytes = encode_word("!done") + b'\x00'
+                        writer.write(response_bytes)
+                        await writer.drain()
+                        login_confirmed = True
+                    else:
+                        print(f"[API Cliente {client_address}] Login fallido: usuario o contraseña incorrectos.")
+                        error_msg = "invalid username or password"
+                        trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
+                        response_bytes = trap_sentence + b'\x00'
+                        writer.write(response_bytes)
+                        await writer.drain()
+                        break  # Cierra la conexión si el login falla
+
                 elif login_confirmed:
                     print(f"[API Cliente {client_address}] Pasando comando a MikroTik: {words}")
                     async with lock:
                         result = await p_conn.run_command(words)
                         print(f"Respuesta de MikroTik (Python): {result}")
-                    
-                    # <<< INICIO DEL CAMBIO CRÍTICO >>>
+
                     response_bytes = b""
-                    # Comprobamos si la respuesta fue un error que capturamos nosotros
                     if result and isinstance(result, list) and 'error' in result[0]:
-                        # Si hubo un error, creamos una respuesta !trap
                         error_msg = result[0]['error']
                         print(f"[Proxy] Enviando error al cliente: {error_msg}")
                         trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
                         response_bytes = trap_sentence + b'\x00'
                     else:
-                        # Si fue exitoso, codificamos la respuesta al formato API
                         print(f"[Proxy] Codificando respuesta exitosa para el cliente.")
                         response_bytes = encode_mikrotik_response(result)
-                    # <<< FIN DEL CAMBIO CRÍTICO >>>
-                    
+
                     writer.write(response_bytes)
                     await writer.drain()
 
@@ -272,7 +286,7 @@ class ProxyServer:
         self.conn_locks = {}
 
     async def start_all(self):
-        for config in self.config_manager.mikrotik_configs:
+        for config in self.config_manager.get_mikrotik_configs():
             if config.get('enabled', True):
                 await self.start_one(config)
 
@@ -302,3 +316,20 @@ class ProxyServer:
 
         for p_conn in self.persistent_conns.values():
             await p_conn.stop()
+    
+    async def stop_one(self, device_id):
+        # Cancelar el servidor
+        if device_id in self.server_tasks:
+            self.server_tasks[device_id].cancel()
+            await asyncio.gather(self.server_tasks[device_id], return_exceptions=True)
+            del self.server_tasks[device_id]
+
+        # Detener la conexión persistente
+        if device_id in self.persistent_conns:
+            await self.persistent_conns[device_id].stop()
+            del self.persistent_conns[device_id]
+
+        if device_id in self.conn_locks:
+            del self.conn_locks[device_id]
+
+        self.status[device_id] = "[red]Dispositivo eliminado[/red]"

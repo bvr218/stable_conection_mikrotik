@@ -1,0 +1,35 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="card">
+    <div class="card-header bg-secondary text-white"> 
+        <h5>Configuración DB NetFlow</h5>
+    </div>
+    <div class="card-body">
+        <form action="{{ url_for('save_db_config') }}" method="post">
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Host</label>
+                    <input type="text" name="db_host" class="form-control" value="{{ db_config.get('db_host', '') }}">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Puerto</label>
+                    <input type="number" name="db_port" class="form-control" value="{{ db_config.get('db_port', 3306) }}">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Usuario</label>
+                    <input type="text" name="db_user" class="form-control" value="{{ db_config.get('db_user', '') }}">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Contraseña</label>
+                    <input type="password" name="db_password" class="form-control" value="{{ db_config.get('db_password', '') }}">
+                </div>
+                <div class="col-md-12 mb-3">
+                    <label class="form-label">Nombre DB</label>
+                    <input type="text" name="db_name" class="form-control" value="{{ db_config.get('db_name', '') }}">
+                </div>
+            </div>
+            <button type="submit" class="btn btn-secondary">Guardar Configuración</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -4,3 +4,6 @@ prompt-toolkit
 librouteros
 sqlalchemy
 flask
+flask-socketio
+flask-login
+librouteros

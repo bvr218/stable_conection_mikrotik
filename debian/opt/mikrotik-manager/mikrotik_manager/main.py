@@ -1,20 +1,30 @@
 # main.py
+
+import sys
+import os
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import asyncio
 from threading import Thread
 from rich.console import Console
 
-from mikrotik_manager.config import ConfigManager
+# from mikrotik_manager.config import ConfigManager
 
-from mikrotik_manager.config import ConfigManager
-from mikrotik_manager.database import DatabaseManager
-from mikrotik_manager.nfcapd import NfcapdManager
-from mikrotik_manager.processor import FlowProcessor
-from mikrotik_manager.proxy import ProxyServer
-from mikrotik_manager.web.app import create_web_app
+from config import ConfigManager
+from database import DatabaseManager
+from nfcapd import NfcapdManager
+from processor import FlowProcessor
+from proxy import ProxyServer
+from web.app import create_web_app
 
 class AppController:
-    def __init__(self):
+    def __init__(self, loop=None):
         self.console = Console()
+        self.loop = loop or asyncio.get_event_loop()
         self.status = {}
         self.shutdown_event = asyncio.Event()
         self.config_manager = ConfigManager()
@@ -42,6 +52,25 @@ class AppController:
         self.console.print("[bold cyan]Servicios de fondo iniciados.[/bold cyan]")
         await self.shutdown_event.wait()
 
+    def reload_configs(self):
+        self.console.print("[yellow]Recargando configuración de dispositivos MikroTik...[/yellow]")
+
+        new_configs = self.config_manager.get_mikrotik_configs()
+
+        # Detener servicios (de forma asincrónica)
+        asyncio.run_coroutine_threadsafe(self.proxy_server.stop_all(), self.loop)
+        asyncio.run_coroutine_threadsafe(self.nfcapd_manager.stop_all(), self.loop)
+
+        # Actualizar configuraciones
+        self.proxy_server.configs = new_configs
+        self.nfcapd_manager.configs = new_configs
+
+        # Iniciar servicios nuevamente
+        asyncio.run_coroutine_threadsafe(self.proxy_server.start_all(), self.loop)
+        asyncio.run_coroutine_threadsafe(self.nfcapd_manager.sync(), self.loop)
+
+        self.console.print("[green]Dispositivos recargados correctamente.[/green]")
+
     def run_web_interface(self):
         """Inicia la interfaz web de Flask en un hilo separado."""
         web_app = create_web_app(self)
@@ -50,12 +79,13 @@ class AppController:
         web_app.run(host='0.0.0.0', port=8080)
 
 async def main():
-    app = AppController()
-    
+    loop = asyncio.get_event_loop()
+    app = AppController(loop=loop)
+
     # Iniciar la interfaz web en un hilo demonio
     web_thread = Thread(target=app.run_web_interface, daemon=True)
     web_thread.start()
-    
+
     # Ejecutar los servicios de fondo en el bucle de eventos principal
     await app.run_background_services()
 

@@ -15,7 +15,7 @@ class DatabaseManager:
         """Crea el pool de conexiones a MySQL."""
         service_config = self.config_manager.get_service_config()
         if not service_config.get('db_host'):
-            self.status['database'] = "[bold yellow]No configurada[/bold yellow]"
+            self.status['database'] = "<b style='color:yellow'>No configurada</b>"
             return
         try:
             self.pool = await aiomysql.create_pool(
@@ -26,10 +26,10 @@ class DatabaseManager:
                 db=service_config['db_name'],
                 autocommit=True
             )
-            self.status['database'] = f"[green]Conectado a {service_config['db_name']}[/green]"
+            self.status['database'] = f"<b style='color:green'>Conectada: {service_config['db_name']}</b>"
             await self.setup_schema()
         except Exception as e:
-            self.status['database'] = f"[bold red]Error de conexión DB[/bold red]"
+            self.status['database'] = f"<b style='color:red'>Error de conexión</b>"
             console.print(f"[red]DB Error: {e}[/red]")
             self.pool = None
 

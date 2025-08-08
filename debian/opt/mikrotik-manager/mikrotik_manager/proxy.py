@@ -68,112 +68,58 @@ class PersistentConnection:
         self.connection_task = None
         self.api = None
 
-    def build_query_from_words(self, api, words):
-        cmd = words[0]
-        path = cmd.replace('/print', '')
-        proplist = []
-        filters = []
-
-        for part in words[1:]:
-            if part.startswith('=.proplist='):
-                props_str = part.split('=.proplist=')[1]
-                proplist = props_str.split(',')
-            elif part.startswith('?') or part.startswith('='):
-                prefix = part[0]
-                key_value = part[1:]
-                if '=' not in key_value:
-                    continue
-                key, value = key_value.split('=', 1)
-                k = Key(key)
-
-                # Detectar operadores
-                if value.startswith('!'):
-                    filters.append(k != value[1:])
-                elif value.startswith('>'):
-                    filters.append(k > value[1:])
-                elif value.startswith('<'):
-                    filters.append(k < value[1:])
-                elif ',' in value:
-                    filters.append(k.In(*value.split(',')))
-                else:
-                    filters.append(k == value)
-
-        q = api.path(path)
-
-        if proplist:
-            keys = [Key(p) for p in proplist]
-            q = q.select(*keys)
-        else:
-            q = q.select()
-
-        if filters:
-            if len(filters) == 1:
-                q = q.where(filters[0])
-            else:
-                q = q.where(And(*filters))
-
-        return list(q)
-
+    
     async def run_command(self, words):
+        """
+        Ejecuta comandos MikroTik simples y complejos, soportando filtros AND/OR.
+        """
         await self.connected.wait()
         if not words:
             return [{"error": "Empty command received"}]
 
         try:
             loop = asyncio.get_running_loop()
-            cmd = words[0]
 
             def execute():
-                if cmd.endswith('/print'):
-                    return self.build_query_from_words(self.api, words)
+                full_command_path = words[0]
+                cmd_parts = full_command_path.strip('/').split('/')
+                *path_parts, command_name = cmd_parts
 
-                # Separar el path y la acción (add, set, remove, etc.)
-                parts = cmd.strip('/').split('/')
-                if len(parts) < 2:
-                    return [{"error": "Comando inválido"}]
-
-                *path_parts, action = parts
-                path_str = '/' + '/'.join(path_parts)
-
-                # Extraer los parámetros
                 params = {}
+                filters = []
+
                 for part in words[1:]:
-                    if part.startswith('=') and '=' in part[1:]:
-                        key_value = part[1:]
-                        key, value = key_value.split('=', 1)
+                    # Filtros (query)
+                    if part.startswith('?') and '=' in part[1:]:
+                        key, value = part[1:].split('=', 1)
+                        filters.append((key.replace('-', '_'), '=', value))
+                    # Parámetros (add, set, remove)
+                    elif part.startswith('=') and '=' in part[1:]:
+                        key, value = part[1:].split('=', 1)
+                        params[key.replace('-', '_')] = value
 
-                        # Solamente .id se convierte a id (para llamadas como remove/set/etc.)
-                        if key == '.id':
-                            python_key = 'id'
-                        else:
-                            python_key = key  # Conserva src-address, redirect-to, etc.
+                # Objeto de ruta
+                path_obj = self.api.path(*path_parts) if path_parts else self.api
 
-                        params[python_key] = value
-
-                endpoint = self.api.path(path_str)
-
-                if action == 'add':
-                    return [endpoint.add(**params)]
-                elif action == 'set':
-                    return [endpoint.set(**params)]
-                elif action == 'remove':
-                    return [endpoint.remove(**params)]
-                elif action == 'enable':
-                    return [endpoint.enable(**params)]
-                elif action == 'disable':
-                    return [endpoint.disable(**params)]
-                elif action == 'call':
-                    return [endpoint.call(**params)]
+                # Si es un print con filtros, usamos queries
+                if command_name == 'print' and filters:
+                    query_parts = [Key(k) == v for k, _, v in filters]
+                    if len(query_parts) > 1:
+                        q = And(*query_parts)
+                    else:
+                        q = query_parts[0]
+                    result = path_obj.select(**params).where(q)
                 else:
-                    return [{"error": f"Acción '{action}' no soportada en '{cmd}'"}]
+                    result = path_obj(command_name, **params)
 
-            result = await loop.run_in_executor(None, execute)
-            return result
+                return list(result)
+
+            return await loop.run_in_executor(None, execute)
 
         except TrapError as e:
-            return [{"error": f"Trap: {str(e)}"}]
+            return [{"error": f"Trap: {e.message}", "category": e.category_name}]
         except Exception as e:
-            return [{"error": f"Exception: {str(e)}"}]
+            return [{"error": str(e)}]
 
 def encode_word(word_str):
     """

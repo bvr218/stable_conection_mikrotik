@@ -10,7 +10,7 @@ Group=root
 # Directorio de trabajo donde se instalará la aplicación
 WorkingDirectory=/opt/mikrotik-manager
 # Comando para ejecutar la aplicación
-ExecStart=debian/opt/mikrotik-manager/main.bin
+ExecStart=/opt/mikrotik-manager/main.bin
 
 # Reiniciar el servicio si falla
 Restart=always

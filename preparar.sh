@@ -5,6 +5,7 @@ set -e
 
 # Nombre del binario ya compilado
 SOURCE_BIN="debian/opt/mikrotik-manager/main.bin"
+DEST_BIN="/opt/mikrotik-manager/main.bin"
 
 # Directorio de destino para la nueva estructura
 DEST_DIR="paquete_listo"
@@ -45,7 +46,7 @@ echo "   - 'debian/install' creado para instalar '$SOURCE_BIN'."
 SERVICE_FILE="$DEST_DIR/etc/systemd/system/mikrotik-manager.service"
 
 if [ -f "$SERVICE_FILE" ]; then
-    sed -i "s|ExecStart=.*|ExecStart=${SOURCE_BIN}|" "$SERVICE_FILE"
+    sed -i "s|ExecStart=.*|ExecStart=${DEST_BIN}|" "$SERVICE_FILE"
     echo "   - Archivo de servicio actualizado para ejecutar el binario."
 else
     echo "   - ADVERTENCIA: No se encontró el archivo de servicio."

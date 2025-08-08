@@ -4,6 +4,6 @@ prompt-toolkit
 librouteros
 sqlalchemy
 flask
-flask-socketio==5.3.4
+flask-socketio
 flask-login
 librouteros

@@ -9,6 +9,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 import asyncio
+import atexit
 from threading import Thread
 from rich.console import Console
 
@@ -33,6 +34,7 @@ class AppController:
         self.proxy_server = ProxyServer(self.config_manager, self.status)
         self.flow_processor = FlowProcessor(self.db_manager, self.status)
         self.background_tasks = []
+        atexit.register(self.nfcapd_manager.stop)
 
     async def run_background_services(self):
         """Inicia todos los servicios de fondo."""
@@ -93,6 +95,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+
         print("\nServicio detenido por el usuario.")
     except Exception as e:
         print(f"Error inesperado: {e}")

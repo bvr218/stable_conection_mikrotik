@@ -26,7 +26,7 @@ cp "$SOURCE_BIN" "$DEST_DIR/"
 echo "   - Binario '$SOURCE_BIN' copiado."
 
 # Copiar la carpeta 'debian' completa
-cp -r debian "$DEST_DIR/"
+cp -r debian/* "$DEST_DIR/"
 echo "   - Carpeta 'debian' copiada."
 
 # 3. AJUSTAR LA CONFIGURACIÓN DE DEBIAN DENTRO DEL NUEVO DIRECTORIO
@@ -34,15 +34,16 @@ echo -e "\n📦 Paso 3: Ajustando la configuración de Debian para el binario...
 
 # 3.1 - Cambiar la arquitectura en 'debian/control'
 BUILD_ARCH=$(dpkg --print-architecture)
-sed -i "s/Architecture: all/Architecture: $BUILD_ARCH/" "$DEST_DIR/debian/DEBIAN/control"
+sed -i "s/Architecture: all/Architecture: $BUILD_ARCH/" "$DEST_DIR/DEBIAN/control"
 echo "   - 'debian/control' actualizado a Architecture: $BUILD_ARCH"
 
 # 3.2 - Crear 'debian/install' para empaquetar solo el binario
-echo "${SOURCE_BIN} opt/mikrotik-manager" > "$DEST_DIR/debian/install"
+echo "${SOURCE_BIN} opt/mikrotik-manager" > "$DEST_DIR/DEBIAN/install"
 echo "   - 'debian/install' creado para instalar '$SOURCE_BIN'."
 
 # 3.3 - Actualizar el servicio de Systemd para que ejecute el binario
-SERVICE_FILE="$DEST_DIR/debian/etc/systemd/system/mikrotik-manager.service"
+SERVICE_FILE="$DEST_DIR/etc/systemd/system/mikrotik-manager.service"
+
 if [ -f "$SERVICE_FILE" ]; then
     sed -i "s|ExecStart=.*|ExecStart=${SOURCE_BIN}|" "$SERVICE_FILE"
     echo "   - Archivo de servicio actualizado para ejecutar el binario."

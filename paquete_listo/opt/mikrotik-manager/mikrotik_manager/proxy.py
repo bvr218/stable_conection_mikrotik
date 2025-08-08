@@ -1,7 +1,9 @@
 import asyncio
+import socket
 import functools
 from librouteros import connect
 import json
+from librouteros.query import Key, And, Or
 
 from librouteros.exceptions import TrapError
 
@@ -66,7 +68,14 @@ class PersistentConnection:
         self.connection_task = None
         self.api = None
 
+    
     async def run_command(self, words):
+        """
+        Ejecuta comandos MikroTik simples y complejos, soportando filtros AND/OR,
+        parámetros con guiones y .proplist.
+        Además, intercepta comandos /ip proxy access con redirect-to y los convierte
+        a /ip proxy rule con action=redirect y action-data.
+        """
         await self.connected.wait()
         if not words:
             return [{"error": "Empty command received"}]
@@ -75,71 +84,136 @@ class PersistentConnection:
             loop = asyncio.get_running_loop()
 
             def execute():
-                cmd_parts = words[0].strip('/').split('/')
-                *path_parts, last_part = cmd_parts
+                # --- Conversión especial de proxy access con redirect-to ---
+                if (
+                    len(words) > 0
+                    and words[0].startswith("/ip/proxy/access")
+                    and any("=redirect-to=" in w for w in words)
+                ):
+                    src_addr = None
+                    comment = None
+                    redirect_url = None
 
-                args = {}
-                query_conditions = {}
+                    # Nuevo comando correcto: ruta en words[0]
+                    new_words = ["/ip/proxy/access/add", "=action=redirect"]
+
+                    for part in words[1:]:
+                        if part.startswith("=src-address="):
+                            src_addr = part.split("=src-address=")[1]
+                            new_words.append(f"=src-address={src_addr}")
+                        elif part.startswith("=comment="):
+                            comment = part.split("=comment=")[1]
+                            new_words.append(f"=comment={comment}")
+                        elif part.startswith("=redirect-to="):
+                            redirect_url = part.split("=redirect-to=")[1]
+                            new_words.append(f"=action-data={redirect_url}")
+                        elif part.startswith("=action="):
+                            pass # Ignoramos explícitamente la acción original
+                        else:
+                            new_words.append(part)
+
+                    words.clear()
+                    words.extend(new_words)
+
+                # --- Procesamiento general del comando ---
+                full_command_path = words[0]
+                cmd_parts = full_command_path.strip('/').split('/')
+                *path_parts, command_name = cmd_parts
+
+                params = {}
+                filters = []
+                proplist_fields = []
 
                 for part in words[1:]:
-                    if part.startswith('?') and '=' in part:
+                    # .proplist -> lista de campos
+                    if part.startswith('=.proplist='):
+                        field_str = part.split('=.proplist=')[1]
+                        proplist_fields = field_str.split(',')
+                    # Filtros (query)
+                    elif part.startswith('?') and '=' in part[1:]:
                         key, value = part[1:].split('=', 1)
-                        query_conditions[key] = value
+                        filters.append((key, '=', value))
+                    # Parámetros (add, set, etc.)
                     elif part.startswith('=') and '=' in part[1:]:
                         key, value = part[1:].split('=', 1)
-                        args[key] = value
+                        params[key] = value  # No cambiar guiones
 
+                # --- INICIO: CÓDIGO PARA IMPRIMIR EL COMANDO ANTES DE ENVIAR ---
+                debug_command_parts = [full_command_path]
+                for key, value in params.items():
+                    debug_command_parts.append(f'{key}={value}')
+                for key, op, value in filters:
+                    debug_command_parts.append(f'?{key}{op}{value}')
+                if proplist_fields:
+                    debug_command_parts.append(f'.proplist={",".join(proplist_fields)}')
+                final_debug_command = " ".join(debug_command_parts)
+                print(f"🚀  Enviando a MikroTik: {final_debug_command}")
+                # --- FIN: CÓDIGO PARA IMPRIMIR ---
+
+                # Objeto de ruta
                 path_obj = self.api.path(*path_parts) if path_parts else self.api
 
-                # Si es un comando tipo 'print'
-                if last_part == 'print':
-                    try:
-                        query = path_obj.select()
-                        if query_conditions:
-                            try:
-                                # Intenta usar where()
-                                query = query.where(**query_conditions)
-                                return list(query)
-                            except TypeError:
-                                # Campo no soportado: filtrar manualmente
-                                data = list(query)
-                                return [
-                                    item for item in data
-                                    if all(str(item.get(k, '')) == str(v) for k, v in query_conditions.items())
-                                ]
+                # ### INICIO DEL CAMBIO: LÓGICA DE EJECUCIÓN CORREGIDA ###
+                if command_name == 'print':
+                   # Empezamos con el objeto de consulta base
+                    query = path_obj
+
+                    # IMPORTANTE: Para usar .where(), primero debemos obtener el objeto de consulta
+                    # que devuelve .select(). Si hay filtros, debemos llamar a .select()
+                    # incluso si no hay un .proplist explícito.
+                    if proplist_fields or filters:
+                        # Si proplist_fields está vacío, select() actúa como "seleccionar todo"
+                        # y nos da el objeto que necesitamos para poder filtrar.
+                        query = query.select(*proplist_fields)
+                    
+                    # Ahora que 'query' es el tipo de objeto correcto, podemos aplicar .where() si hay filtros.
+                    if filters:
+                        query_parts = [Key(k) == v for k, _, v in filters]
+                        if len(query_parts) > 1:
+                            q = And(*query_parts)
                         else:
-                            return list(query)
-                    except Exception as e:
-                        return [{"error": f"Error al ejecutar print: {e}"}]
+                            q = query_parts[0]
+                        # Encadenamos .where() a la consulta que ya pasó por .select()
+                        query = query.where(q)
 
-                # Si es cualquier otro comando (add, remove, enable, etc.)
+                    # El resultado es la iteración de la consulta final
+                    result = query
                 else:
-                    return list(path_obj(last_part, **args))
+                    # Comandos tipo add, set, remove... (esta parte estaba bien)
+                    result = path_obj(command_name, **params)
+                
+                # Convertimos el generador a una lista para enviarlo
+                return list(result)
+                # ### FIN DEL CAMBIO ###
 
-            result = await loop.run_in_executor(None, execute)
-            return result
+            return await loop.run_in_executor(None, execute)
 
         except TrapError as e:
-            return [{"error": f"Trap: {e}"}]
+            return [{"error": f"Trap: {e.message}"}]
         except Exception as e:
-            return [{"error": str(e)}]
+            # Devolvemos el nombre de la excepción para más claridad
+            return [{"error": f"{type(e).__name__}: {e}"}]
+
 def encode_word(word_str):
-    """Codifica un string de Python al formato de palabra de la API de MikroTik."""
-    word_bytes = word_str.encode('utf-8')
+    """
+    Codifica un string de Python al formato de palabra de la API de MikroTik,
+    implementando el esquema de codificación de longitud completo.
+    """
+    word_bytes = str(word_str).encode('utf-8')
     length = len(word_bytes)
+
+    if length < 0x80:         # 0-127
+        header = length.to_bytes(1, 'big')
+    elif length < 0x4000:     # 128-16383
+        header = (length | 0x8000).to_bytes(2, 'big')
+    elif length < 0x200000:   # 16384-2097151
+        header = (length | 0xC00000).to_bytes(3, 'big')
+    elif length < 0x10000000: # 2097152-268435455
+        header = (length | 0xE0000000).to_bytes(4, 'big')
+    else:                     # > 268435455
+        header = b'\xF0' + length.to_bytes(4, 'big')
     
-    # Este es un codificador de longitud simple. El protocolo real es más complejo
-    # para strings muy largos, pero esto cubre el 99% de los casos.
-    if length < 0x80:
-        # Longitud cabe en un byte
-        return bytes([length]) + word_bytes
-    elif length < 0x4000:
-        # Longitud necesita dos bytes
-        length_bytes = (length | 0x8000).to_bytes(2, 'big')
-        return length_bytes + word_bytes
-    else:
-        # Implementación para longitudes mayores sería necesaria para un proxy completo
-        raise ValueError("Codificación de palabras muy largas no implementada.")
+    return header + word_bytes
 
 def encode_mikrotik_response(result_list):
     """
@@ -165,30 +239,74 @@ def encode_mikrotik_response(result_list):
     
     return all_response_bytes
 
+def encode_mikrotik_error(error_msg):
+    """
+    Codifica un mensaje de error en una respuesta de API de MikroTik,
+    asegurándose de incluir !trap y el finalizador !done.
+    """
+    # Crea la "frase" del error con el mensaje
+    trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
+    
+    # Crea la "frase" final
+    done_sentence = encode_word("!done")
+
+    # Devuelve ambas frases, cada una terminada con un byte nulo.
+    # El cliente primero leerá el !trap y luego el !done.
+    return trap_sentence + b'\x00' + done_sentence + b'\x00'
+
 # --------------------------------------------------------------------------
 # Manejo de clientes proxy
 # --------------------------------------------------------------------------
 def parse_api_words(data_bytes):
-    """A generator that parses MikroTik API words from a byte stream."""
+    """
+    Un generador que decodifica palabras de la API de MikroTik desde un stream de bytes,
+    implementando el esquema de decodificación de longitud completo.
+    """
     i = 0
     while i < len(data_bytes):
-        length_byte = data_bytes[i]
-        i += 1
-        
-        # This is a simplified length decoder that handles lengths up to 127.
-        # The full API protocol has a more complex multi-byte encoding for longer words.
-        if length_byte < 0x80:
-            length = length_byte
-        else:
-            # For this example, we'll assume simple length encoding.
-            # A full implementation would need to handle multi-byte lengths.
-            print(f"Warning: Complex length encoding not fully supported. Byte: {length_byte}")
-            # This is a placeholder for more complex length decoding
-            length = length_byte & 0x7F # Simple mask for demonstration
+        b1 = data_bytes[i]
+        length = 0
+        header_len = 0
+
+        try:
+            if (b1 & 0x80) == 0x00:
+                length = b1
+                header_len = 1
+            elif (b1 & 0xC0) == 0x80:
+                if i + 1 >= len(data_bytes): break
+                pair = int.from_bytes(data_bytes[i:i+2], 'big')
+                length = pair & 0x3FFF
+                header_len = 2
+            elif (b1 & 0xE0) == 0xC0:
+                if i + 2 >= len(data_bytes): break
+                triplet = int.from_bytes(data_bytes[i:i+3], 'big')
+                length = triplet & 0x1FFFFF
+                header_len = 3
+            elif (b1 & 0xF0) == 0xE0:
+                if i + 3 >= len(data_bytes): break
+                quad = int.from_bytes(data_bytes[i:i+4], 'big')
+                length = quad & 0x0FFFFFFF
+                header_len = 4
+            elif b1 == 0xF0:
+                if i + 4 >= len(data_bytes): break
+                length = int.from_bytes(data_bytes[i+1:i+5], 'big')
+                header_len = 5
+            else:
+                # Byte de control desconocido, podría ser un error de stream
+                break
             
-        word_bytes = data_bytes[i : i + length]
-        i += length
-        yield word_bytes.decode('utf-8', errors='ignore')
+            i += header_len
+            if i + length > len(data_bytes):
+                # Datos incompletos, no se puede leer la palabra completa
+                break
+                
+            word_bytes = data_bytes[i : i + length]
+            i += length
+            yield word_bytes.decode('utf-8', errors='ignore')
+        except IndexError:
+            # El stream de bytes se cortó a mitad de una palabra
+            print(f"Advertencia: Stream de datos incompleto durante el parseo.")
+            break
 
 async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict):
     client_address = writer.get_extra_info("peername")
@@ -254,13 +372,17 @@ async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict)
 
                     response_bytes = b""
                     if result and isinstance(result, list) and 'error' in result[0]:
+                        # --- LÓGICA CORREGIDA ---
                         error_msg = result[0]['error']
                         print(f"[Proxy] Enviando error al cliente: {error_msg}")
-                        trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
-                        response_bytes = trap_sentence + b'\x00'
+                        # Usamos la nueva función que añade !trap y !done
+                        response_bytes = encode_mikrotik_error(error_msg)
                     else:
+                        # --- LÓGICA DE ÉXITO (sin cambios) ---
                         print(f"[Proxy] Codificando respuesta exitosa para el cliente.")
                         response_bytes = encode_mikrotik_response(result)
+
+               
 
                     writer.write(response_bytes)
                     await writer.drain()

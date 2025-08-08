@@ -12,6 +12,7 @@
         <table class="table align-middle">
             <thead class="table-light">
                 <tr>
+                    <th>Id</th>
                     <th>Nombre</th>
                     <th>Host:Puerto</th>
                     <th>Proxy Local</th>
@@ -23,6 +24,7 @@
             <tbody>
                 {% for device in devices %}
                 <tr>
+                    <td>{{ device.id }}</td>
                     <td>{{ device.name }}</td>
                     <td>{{ device.host }}:{{ device.port }}</td>
                     <td>127.0.0.1:{{ device.proxy_port }}</td>
@@ -67,6 +69,10 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
             </div>
             <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Id</label>
+                    <input type="text" name="id" class="form-control" required>
+                </div>
                 <div class="mb-3">
                     <label class="form-label">Nombre</label>
                     <input type="text" name="name" class="form-control" required>
@@ -164,6 +170,7 @@ function cargarDispositivos() {
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
+                    <td>${device.id}</td>
                     <td>${device.name}</td>
                     <td>${device.host}:${device.port}</td>
                     <td>127.0.0.1:${device.proxy_port}</td>

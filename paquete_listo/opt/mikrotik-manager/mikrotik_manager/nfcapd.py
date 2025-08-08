@@ -22,17 +22,26 @@ class NfcapdManager:
         sources = []
         for config in self.configs:
             if config.get('netflow_enabled', False):
-                capture_dir = os.path.join(NFCAPD_CAPTURE_BASE_DIR, str(config['id']))
+                clean_id = str(config['id']).strip()
+                if not clean_id:
+                    continue
+
+                capture_dir = os.path.join(NFCAPD_CAPTURE_BASE_DIR, clean_id)
                 os.makedirs(capture_dir, exist_ok=True)
-                sources.append(f"-n {config['id']},{config['host']},{capture_dir}")
+                
+                # --- ESTA ES LA LÍNEA CORREGIDA ---
+                # Agregamos '-n' y su valor como dos elementos separados a la lista.
+                sources.extend(['-n', f"{clean_id},{config['host']},{capture_dir}"])
         
         if not sources:
             return None
 
+        # Ya no necesitamos los prints de depuración, así que los he quitado.
         return [NFCAPD_PATH, '-E', '-p', str(NFCAPD_PORT), '-t', '60', '-D'] + sources
 
     def stop(self):
         if NFCAPD_PATH:
+            print(f"Ejecutando comando de salida")
             subprocess.run(['pkill', 'nfcapd'], capture_output=True)
         self.status['nfcapd'] = "<b style='color:red'>Detenido</b>"
 
@@ -51,8 +60,8 @@ class NfcapdManager:
         self.stop()
         await asyncio.sleep(1)
         command = self._get_command()
-
         if command:
+            print(f"Ejecutando comando: {' '.join(command)}")
             try:
                 self.process = subprocess.Popen(command)
                 self.status['nfcapd'] = f"<b style='color:green'>Activo en puerto {NFCAPD_PORT}</b>"

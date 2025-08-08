@@ -71,7 +71,10 @@ class PersistentConnection:
     
     async def run_command(self, words):
         """
-        Ejecuta comandos MikroTik simples y complejos, soportando filtros AND/OR.
+        Ejecuta comandos MikroTik simples y complejos, soportando filtros AND/OR,
+        parámetros con guiones y .proplist.
+        Además, intercepta comandos /ip proxy access con redirect-to y los convierte
+        a /ip proxy rule con action=redirect y action-data.
         """
         await self.connected.wait()
         if not words:
@@ -81,45 +84,115 @@ class PersistentConnection:
             loop = asyncio.get_running_loop()
 
             def execute():
+                # --- Conversión especial de proxy access con redirect-to ---
+                if (
+                    len(words) > 0
+                    and words[0].startswith("/ip/proxy/access")
+                    and any("=redirect-to=" in w for w in words)
+                ):
+                    src_addr = None
+                    comment = None
+                    redirect_url = None
+
+                    # Nuevo comando correcto: ruta en words[0]
+                    new_words = ["/ip/proxy/access/add", "=action=redirect"]
+
+                    for part in words[1:]:
+                        if part.startswith("=src-address="):
+                            src_addr = part.split("=src-address=")[1]
+                            new_words.append(f"=src-address={src_addr}")
+                        elif part.startswith("=comment="):
+                            comment = part.split("=comment=")[1]
+                            new_words.append(f"=comment={comment}")
+                        elif part.startswith("=redirect-to="):
+                            redirect_url = part.split("=redirect-to=")[1]
+                            new_words.append(f"=action-data={redirect_url}")
+                        elif part.startswith("=action="):
+                            pass # Ignoramos explícitamente la acción original
+                        else:
+                            new_words.append(part)
+
+                    words.clear()
+                    words.extend(new_words)
+
+                # --- Procesamiento general del comando ---
                 full_command_path = words[0]
                 cmd_parts = full_command_path.strip('/').split('/')
                 *path_parts, command_name = cmd_parts
 
                 params = {}
                 filters = []
+                proplist_fields = []
 
                 for part in words[1:]:
+                    # .proplist -> lista de campos
+                    if part.startswith('=.proplist='):
+                        field_str = part.split('=.proplist=')[1]
+                        proplist_fields = field_str.split(',')
                     # Filtros (query)
-                    if part.startswith('?') and '=' in part[1:]:
+                    elif part.startswith('?') and '=' in part[1:]:
                         key, value = part[1:].split('=', 1)
-                        filters.append((key.replace('-', '_'), '=', value))
-                    # Parámetros (add, set, remove)
+                        filters.append((key, '=', value))
+                    # Parámetros (add, set, etc.)
                     elif part.startswith('=') and '=' in part[1:]:
                         key, value = part[1:].split('=', 1)
-                        params[key.replace('-', '_')] = value
+                        params[key] = value  # No cambiar guiones
+
+                # --- INICIO: CÓDIGO PARA IMPRIMIR EL COMANDO ANTES DE ENVIAR ---
+                debug_command_parts = [full_command_path]
+                for key, value in params.items():
+                    debug_command_parts.append(f'{key}={value}')
+                for key, op, value in filters:
+                    debug_command_parts.append(f'?{key}{op}{value}')
+                if proplist_fields:
+                    debug_command_parts.append(f'.proplist={",".join(proplist_fields)}')
+                final_debug_command = " ".join(debug_command_parts)
+                print(f"🚀  Enviando a MikroTik: {final_debug_command}")
+                # --- FIN: CÓDIGO PARA IMPRIMIR ---
 
                 # Objeto de ruta
                 path_obj = self.api.path(*path_parts) if path_parts else self.api
 
-                # Si es un print con filtros, usamos queries
-                if command_name == 'print' and filters:
-                    query_parts = [Key(k) == v for k, _, v in filters]
-                    if len(query_parts) > 1:
-                        q = And(*query_parts)
-                    else:
-                        q = query_parts[0]
-                    result = path_obj.select(**params).where(q)
-                else:
-                    result = path_obj(command_name, **params)
+                # ### INICIO DEL CAMBIO: LÓGICA DE EJECUCIÓN CORREGIDA ###
+                if command_name == 'print':
+                   # Empezamos con el objeto de consulta base
+                    query = path_obj
 
+                    # IMPORTANTE: Para usar .where(), primero debemos obtener el objeto de consulta
+                    # que devuelve .select(). Si hay filtros, debemos llamar a .select()
+                    # incluso si no hay un .proplist explícito.
+                    if proplist_fields or filters:
+                        # Si proplist_fields está vacío, select() actúa como "seleccionar todo"
+                        # y nos da el objeto que necesitamos para poder filtrar.
+                        query = query.select(*proplist_fields)
+                    
+                    # Ahora que 'query' es el tipo de objeto correcto, podemos aplicar .where() si hay filtros.
+                    if filters:
+                        query_parts = [Key(k) == v for k, _, v in filters]
+                        if len(query_parts) > 1:
+                            q = And(*query_parts)
+                        else:
+                            q = query_parts[0]
+                        # Encadenamos .where() a la consulta que ya pasó por .select()
+                        query = query.where(q)
+
+                    # El resultado es la iteración de la consulta final
+                    result = query
+                else:
+                    # Comandos tipo add, set, remove... (esta parte estaba bien)
+                    result = path_obj(command_name, **params)
+                
+                # Convertimos el generador a una lista para enviarlo
                 return list(result)
+                # ### FIN DEL CAMBIO ###
 
             return await loop.run_in_executor(None, execute)
 
         except TrapError as e:
-            return [{"error": f"Trap: {e.message}", "category": e.category_name}]
+            return [{"error": f"Trap: {e.message}"}]
         except Exception as e:
-            return [{"error": str(e)}]
+            # Devolvemos el nombre de la excepción para más claridad
+            return [{"error": f"{type(e).__name__}: {e}"}]
 
 def encode_word(word_str):
     """

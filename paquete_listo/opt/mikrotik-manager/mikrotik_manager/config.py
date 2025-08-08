@@ -13,7 +13,7 @@ db_dir = os.path.dirname(DATABASE_FILE)
 if db_dir:
     os.makedirs(db_dir, exist_ok=True)
 
-engine = create_engine(f'sqlite:///{DATABASE_FILE}')
+engine = create_engine(f'sqlite:///{DATABASE_FILE}', connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

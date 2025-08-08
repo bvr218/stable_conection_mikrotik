@@ -1,7 +1,9 @@
 import asyncio
+import socket
 import functools
 from librouteros import connect
 import json
+from librouteros.query import Key, And, Or
 
 from librouteros.exceptions import TrapError
 
@@ -66,54 +68,112 @@ class PersistentConnection:
         self.connection_task = None
         self.api = None
 
+    def build_query_from_words(self, api, words):
+        cmd = words[0]
+        path = cmd.replace('/print', '')
+        proplist = []
+        filters = []
+
+        for part in words[1:]:
+            if part.startswith('=.proplist='):
+                props_str = part.split('=.proplist=')[1]
+                proplist = props_str.split(',')
+            elif part.startswith('?') or part.startswith('='):
+                prefix = part[0]
+                key_value = part[1:]
+                if '=' not in key_value:
+                    continue
+                key, value = key_value.split('=', 1)
+                k = Key(key)
+
+                # Detectar operadores
+                if value.startswith('!'):
+                    filters.append(k != value[1:])
+                elif value.startswith('>'):
+                    filters.append(k > value[1:])
+                elif value.startswith('<'):
+                    filters.append(k < value[1:])
+                elif ',' in value:
+                    filters.append(k.In(*value.split(',')))
+                else:
+                    filters.append(k == value)
+
+        q = api.path(path)
+
+        if proplist:
+            keys = [Key(p) for p in proplist]
+            q = q.select(*keys)
+        else:
+            q = q.select()
+
+        if filters:
+            if len(filters) == 1:
+                q = q.where(filters[0])
+            else:
+                q = q.where(And(*filters))
+
+        return list(q)
+
     async def run_command(self, words):
-        """
-        Ejecuta de forma genérica cualquier comando de la API de MikroTik
-        usando el mecanismo universal de la librería librouteros.
-        """
         await self.connected.wait()
         if not words:
             return [{"error": "Empty command received"}]
 
         try:
             loop = asyncio.get_running_loop()
+            cmd = words[0]
 
             def execute():
-                full_command_path = words[0]
-                cmd_parts = full_command_path.strip('/').split('/')
-                *path_parts, command_name = cmd_parts
+                if cmd.endswith('/print'):
+                    return self.build_query_from_words(self.api, words)
 
+                # Separar el path y la acción (add, set, remove, etc.)
+                parts = cmd.strip('/').split('/')
+                if len(parts) < 2:
+                    return [{"error": "Comando inválido"}]
+
+                *path_parts, action = parts
+                path_str = '/' + '/'.join(path_parts)
+
+                # Extraer los parámetros
                 params = {}
                 for part in words[1:]:
-                    if part.startswith(('?', '=')) and '=' in part[1:]:
-                        key, value = part[1:].split('=', 1)
-                        params[key.replace('-', '_')] = value
+                    if part.startswith('=') and '=' in part[1:]:
+                        key_value = part[1:]
+                        key, value = key_value.split('=', 1)
 
-                # Obtener el objeto de la ruta base
-                path_obj = self.api.path(*path_parts) if path_parts else self.api
+                        # Solamente .id se convierte a id (para llamadas como remove/set/etc.)
+                        if key == '.id':
+                            python_key = 'id'
+                        else:
+                            python_key = key  # Conserva src-address, redirect-to, etc.
 
-                # ------------------------------------------------------------------- #
-                # --> LÓGICA UNIVERSAL Y CORRECTA                                   #
-                # ------------------------------------------------------------------- #
+                        params[python_key] = value
 
-                # La forma genérica de ejecutar CUALQUIER comando (print, add, set, etc.)
-                # es llamar al objeto de la ruta directamente, pasándole el
-                # nombre del comando y los parámetros.
-                result = path_obj(command_name, **params)
-                
-                # ------------------------------------------------------------------- #
-                
-                return list(result)
+                endpoint = self.api.path(path_str)
+
+                if action == 'add':
+                    return [endpoint.add(**params)]
+                elif action == 'set':
+                    return [endpoint.set(**params)]
+                elif action == 'remove':
+                    return [endpoint.remove(**params)]
+                elif action == 'enable':
+                    return [endpoint.enable(**params)]
+                elif action == 'disable':
+                    return [endpoint.disable(**params)]
+                elif action == 'call':
+                    return [endpoint.call(**params)]
+                else:
+                    return [{"error": f"Acción '{action}' no soportada en '{cmd}'"}]
 
             result = await loop.run_in_executor(None, execute)
             return result
 
         except TrapError as e:
-            # Error devuelto por el propio MikroTik
-            return [{"error": f"Trap: {e.message}", "category": e.category_name}]
+            return [{"error": f"Trap: {str(e)}"}]
         except Exception as e:
-            # Cualquier otro error (ej: comando no válido, que causa un Trap)
-            return [{"error": str(e)}]
+            return [{"error": f"Exception: {str(e)}"}]
 
 def encode_word(word_str):
     """
@@ -159,6 +219,21 @@ def encode_mikrotik_response(result_list):
     all_response_bytes += encode_word("!done") + b'\x00'
     
     return all_response_bytes
+
+def encode_mikrotik_error(error_msg):
+    """
+    Codifica un mensaje de error en una respuesta de API de MikroTik,
+    asegurándose de incluir !trap y el finalizador !done.
+    """
+    # Crea la "frase" del error con el mensaje
+    trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
+    
+    # Crea la "frase" final
+    done_sentence = encode_word("!done")
+
+    # Devuelve ambas frases, cada una terminada con un byte nulo.
+    # El cliente primero leerá el !trap y luego el !done.
+    return trap_sentence + b'\x00' + done_sentence + b'\x00'
 
 # --------------------------------------------------------------------------
 # Manejo de clientes proxy
@@ -278,13 +353,17 @@ async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict)
 
                     response_bytes = b""
                     if result and isinstance(result, list) and 'error' in result[0]:
+                        # --- LÓGICA CORREGIDA ---
                         error_msg = result[0]['error']
                         print(f"[Proxy] Enviando error al cliente: {error_msg}")
-                        trap_sentence = encode_word("!trap") + encode_word(f"=message={error_msg}")
-                        response_bytes = trap_sentence + b'\x00'
+                        # Usamos la nueva función que añade !trap y !done
+                        response_bytes = encode_mikrotik_error(error_msg)
                     else:
+                        # --- LÓGICA DE ÉXITO (sin cambios) ---
                         print(f"[Proxy] Codificando respuesta exitosa para el cliente.")
                         response_bytes = encode_mikrotik_response(result)
+
+               
 
                     writer.write(response_bytes)
                     await writer.drain()

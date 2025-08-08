@@ -60,8 +60,8 @@ class NfcapdManager:
         self.stop()
         await asyncio.sleep(1)
         command = self._get_command()
-        print(f"Ejecutando comando: {' '.join(command)}")
         if command:
+            print(f"Ejecutando comando: {' '.join(command)}")
             try:
                 self.process = subprocess.Popen(command)
                 self.status['nfcapd'] = f"<b style='color:green'>Activo en puerto {NFCAPD_PORT}</b>"

@@ -44,7 +44,7 @@ echo "   - 'debian/install' creado para instalar '$SOURCE_BIN'."
 # 3.3 - Actualizar el servicio de Systemd para que ejecute el binario
 SERVICE_FILE="$DEST_DIR/debian/etc/systemd/system/mikrotik-manager.service"
 if [ -f "$SERVICE_FILE" ]; then
-    sed -i "s|ExecStart=.*|ExecStart=/opt/mikrotik-manager/${SOURCE_BIN}|" "$SERVICE_FILE"
+    sed -i "s|ExecStart=.*|ExecStart=${SOURCE_BIN}|" "$SERVICE_FILE"
     echo "   - Archivo de servicio actualizado para ejecutar el binario."
 else
     echo "   - ADVERTENCIA: No se encontró el archivo de servicio."

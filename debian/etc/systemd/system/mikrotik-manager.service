@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 # Cambia el usuario si es necesario, pero www-data es común para servicios web
-User=www-data
-Group=www-data
+User=root
+Group=root
 
 # Directorio de trabajo donde se instalará la aplicación
-WorkingDirectory=/opt/mikrotik-manager/mikrotik_manager
+WorkingDirectory=/opt/mikrotik-manager
 # Comando para ejecutar la aplicación
 ExecStart=/usr/bin/python3 /opt/mikrotik-manager/mikrotik_manager/main.py
 

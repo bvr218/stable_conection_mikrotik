@@ -8,7 +8,7 @@ User=www-data
 Group=www-data
 
 # Directorio de trabajo donde se instalará la aplicación
-WorkingDirectory=/opt/mikrotik-manager
+WorkingDirectory=/opt/mikrotik-manager/mikrotik_manager
 # Comando para ejecutar la aplicación
 ExecStart=/opt/mikrotik-manager/main.bin
 

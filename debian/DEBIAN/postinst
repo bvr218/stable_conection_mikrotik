@@ -6,12 +6,13 @@
 # Define el usuario que ejecutará el servicio.
 # ¡IMPORTANTE! Este usuario debe ser el mismo que configures en tu archivo .service
 # Un usuario común para servicios web es 'www-data'.
-APP_USER="www-data" # <-- ¡CAMBIA ESTO SI ES NECESARIO!
+APP_USER="root" # <-- ¡CAMBIA ESTO SI ES NECESARIO!
 APP_DIR="/opt/mikrotik-manager"
 
 echo "Estableciendo propietario de los archivos a '$APP_USER'..."
 # La opción -R (recursivo) aplica los permisos a la carpeta y todo su contenido.
 chown -R $APP_USER:$APP_USER $APP_DIR
+chmod -R u+rwX $APP_DIR
 
 # --- FIN DE LA SECCIÓN DE PERMISOS ---
 

@@ -21,17 +21,17 @@ class FlowProcessor:
         while True:
             await asyncio.sleep(interval)
             if not NFDUMP_PATH:
-                self.status['processor'] = "[bold yellow]En espera (nfdump no instalado)[/bold yellow]"
+                self.status['processor'] = "<b style='color:yellow'>En espera (nfdump no instalado)</b>"
                 continue
             if self.db.pool:
                 self.status['processor'] = f"Procesando desde {datetime.now().strftime('%H:%M:%S')}"
                 try:
                     await self.process_all_flows()
-                    self.status['processor'] = f"[green]OK, últ. ejecución: {datetime.now().strftime('%H:%M:%S')}[/green]"
+                    self.status['processor'] = f"<b style='color:green'>OK, últ. ejecución: {datetime.now().strftime('%H:%M:%S')}</b>"
                 except Exception as e:
-                    self.status['processor'] = f"[red]Error: {e}[/red]"
+                    self.status['processor'] = f"<b style='color:red'>Error: {e}</b>"
             else:
-                self.status['processor'] = "[yellow]En espera (DB no conectada)[/yellow]"
+                self.status['processor'] = "<b style='color:yellow'>En espera (DB no conectada)</b>"
 
     async def process_all_flows(self):
         if not os.path.isdir(NFCAPD_CAPTURE_BASE_DIR):
@@ -44,7 +44,17 @@ class FlowProcessor:
             services_rows = await self.db.execute_query(
                 "SELECT id, ip, idcliente, status_user, mac FROM tblservicios WHERE nodo = %s", (router_id,), fetch='all'
             )
-            if not services_rows: continue
+            if not services_rows:
+                # Si no hay servicios para este router, limpia los archivos de flujo capturados.
+                for filename in os.listdir(folder):
+                    filepath = os.path.join(folder, filename)
+                    try:
+                        if os.path.isfile(filepath):
+                            os.remove(filepath)
+                    except OSError as e:
+                        # Opcional: registrar el error si no se puede borrar un archivo
+                        print(f"Error al eliminar {filepath}: {e}")
+                continue # Continúa con el siguiente router
 
             all_services = {}
             for serv in services_rows:

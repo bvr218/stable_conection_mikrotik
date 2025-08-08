@@ -88,6 +88,7 @@ def create_web_app(app_controller):
         next_port = app_controller.config_manager.find_next_available_port()
         new_device = MikrotikDevice(
             name=request.form['name'],
+            id=request.form['id'],
             host=request.form['host'],
             port=int(request.form['port']),
             user=request.form['user'],
@@ -112,9 +113,7 @@ def create_web_app(app_controller):
     @app.route('/api/device-status')
     @login_required
     def device_status():
-        db_session = SessionLocal()
-        devices = db_session.query(MikrotikDevice).all()
-        return render_template('partials/device_status.html', devices=devices)
+        return render_template('partials/device_status.html', status=app_controller.status)
 
     @app.route('/devices')
     @login_required
@@ -162,6 +161,7 @@ def create_web_app(app_controller):
             return jsonify({'error': 'Dispositivo no encontrado'}), 404
 
         device.name = request.form['name']
+        device.id = request.form['id']
         device.host = request.form['host']
         device.port = int(request.form['port'])
         device.user = request.form['user']

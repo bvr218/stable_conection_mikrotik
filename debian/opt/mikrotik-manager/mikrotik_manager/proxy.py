@@ -67,6 +67,10 @@ class PersistentConnection:
         self.api = None
 
     async def run_command(self, words):
+        """
+        Ejecuta de forma genérica cualquier comando de la API de MikroTik
+        usando el mecanismo universal de la librería librouteros.
+        """
         await self.connected.wait()
         if not words:
             return [{"error": "Empty command received"}]
@@ -75,71 +79,62 @@ class PersistentConnection:
             loop = asyncio.get_running_loop()
 
             def execute():
-                cmd_parts = words[0].strip('/').split('/')
-                *path_parts, last_part = cmd_parts
+                full_command_path = words[0]
+                cmd_parts = full_command_path.strip('/').split('/')
+                *path_parts, command_name = cmd_parts
 
-                args = {}
-                query_conditions = {}
-
+                params = {}
                 for part in words[1:]:
-                    if part.startswith('?') and '=' in part:
+                    if part.startswith(('?', '=')) and '=' in part[1:]:
                         key, value = part[1:].split('=', 1)
-                        query_conditions[key] = value
-                    elif part.startswith('=') and '=' in part[1:]:
-                        key, value = part[1:].split('=', 1)
-                        args[key] = value
+                        params[key.replace('-', '_')] = value
 
+                # Obtener el objeto de la ruta base
                 path_obj = self.api.path(*path_parts) if path_parts else self.api
 
-                # Si es un comando tipo 'print'
-                if last_part == 'print':
-                    try:
-                        query = path_obj.select()
-                        if query_conditions:
-                            try:
-                                # Intenta usar where()
-                                query = query.where(**query_conditions)
-                                return list(query)
-                            except TypeError:
-                                # Campo no soportado: filtrar manualmente
-                                data = list(query)
-                                return [
-                                    item for item in data
-                                    if all(str(item.get(k, '')) == str(v) for k, v in query_conditions.items())
-                                ]
-                        else:
-                            return list(query)
-                    except Exception as e:
-                        return [{"error": f"Error al ejecutar print: {e}"}]
+                # ------------------------------------------------------------------- #
+                # --> LÓGICA UNIVERSAL Y CORRECTA                                   #
+                # ------------------------------------------------------------------- #
 
-                # Si es cualquier otro comando (add, remove, enable, etc.)
-                else:
-                    return list(path_obj(last_part, **args))
+                # La forma genérica de ejecutar CUALQUIER comando (print, add, set, etc.)
+                # es llamar al objeto de la ruta directamente, pasándole el
+                # nombre del comando y los parámetros.
+                result = path_obj(command_name, **params)
+                
+                # ------------------------------------------------------------------- #
+                
+                return list(result)
 
             result = await loop.run_in_executor(None, execute)
             return result
 
         except TrapError as e:
-            return [{"error": f"Trap: {e}"}]
+            # Error devuelto por el propio MikroTik
+            return [{"error": f"Trap: {e.message}", "category": e.category_name}]
         except Exception as e:
+            # Cualquier otro error (ej: comando no válido, que causa un Trap)
             return [{"error": str(e)}]
+
 def encode_word(word_str):
-    """Codifica un string de Python al formato de palabra de la API de MikroTik."""
-    word_bytes = word_str.encode('utf-8')
+    """
+    Codifica un string de Python al formato de palabra de la API de MikroTik,
+    implementando el esquema de codificación de longitud completo.
+    """
+    word_bytes = str(word_str).encode('utf-8')
     length = len(word_bytes)
+
+    if length < 0x80:         # 0-127
+        header = length.to_bytes(1, 'big')
+    elif length < 0x4000:     # 128-16383
+        header = (length | 0x8000).to_bytes(2, 'big')
+    elif length < 0x200000:   # 16384-2097151
+        header = (length | 0xC00000).to_bytes(3, 'big')
+    elif length < 0x10000000: # 2097152-268435455
+        header = (length | 0xE0000000).to_bytes(4, 'big')
+    else:                     # > 268435455
+        header = b'\xF0' + length.to_bytes(4, 'big')
     
-    # Este es un codificador de longitud simple. El protocolo real es más complejo
-    # para strings muy largos, pero esto cubre el 99% de los casos.
-    if length < 0x80:
-        # Longitud cabe en un byte
-        return bytes([length]) + word_bytes
-    elif length < 0x4000:
-        # Longitud necesita dos bytes
-        length_bytes = (length | 0x8000).to_bytes(2, 'big')
-        return length_bytes + word_bytes
-    else:
-        # Implementación para longitudes mayores sería necesaria para un proxy completo
-        raise ValueError("Codificación de palabras muy largas no implementada.")
+    return header + word_bytes
 
 def encode_mikrotik_response(result_list):
     """
@@ -169,26 +164,55 @@ def encode_mikrotik_response(result_list):
 # Manejo de clientes proxy
 # --------------------------------------------------------------------------
 def parse_api_words(data_bytes):
-    """A generator that parses MikroTik API words from a byte stream."""
+    """
+    Un generador que decodifica palabras de la API de MikroTik desde un stream de bytes,
+    implementando el esquema de decodificación de longitud completo.
+    """
     i = 0
     while i < len(data_bytes):
-        length_byte = data_bytes[i]
-        i += 1
-        
-        # This is a simplified length decoder that handles lengths up to 127.
-        # The full API protocol has a more complex multi-byte encoding for longer words.
-        if length_byte < 0x80:
-            length = length_byte
-        else:
-            # For this example, we'll assume simple length encoding.
-            # A full implementation would need to handle multi-byte lengths.
-            print(f"Warning: Complex length encoding not fully supported. Byte: {length_byte}")
-            # This is a placeholder for more complex length decoding
-            length = length_byte & 0x7F # Simple mask for demonstration
+        b1 = data_bytes[i]
+        length = 0
+        header_len = 0
+
+        try:
+            if (b1 & 0x80) == 0x00:
+                length = b1
+                header_len = 1
+            elif (b1 & 0xC0) == 0x80:
+                if i + 1 >= len(data_bytes): break
+                pair = int.from_bytes(data_bytes[i:i+2], 'big')
+                length = pair & 0x3FFF
+                header_len = 2
+            elif (b1 & 0xE0) == 0xC0:
+                if i + 2 >= len(data_bytes): break
+                triplet = int.from_bytes(data_bytes[i:i+3], 'big')
+                length = triplet & 0x1FFFFF
+                header_len = 3
+            elif (b1 & 0xF0) == 0xE0:
+                if i + 3 >= len(data_bytes): break
+                quad = int.from_bytes(data_bytes[i:i+4], 'big')
+                length = quad & 0x0FFFFFFF
+                header_len = 4
+            elif b1 == 0xF0:
+                if i + 4 >= len(data_bytes): break
+                length = int.from_bytes(data_bytes[i+1:i+5], 'big')
+                header_len = 5
+            else:
+                # Byte de control desconocido, podría ser un error de stream
+                break
             
-        word_bytes = data_bytes[i : i + length]
-        i += length
-        yield word_bytes.decode('utf-8', errors='ignore')
+            i += header_len
+            if i + length > len(data_bytes):
+                # Datos incompletos, no se puede leer la palabra completa
+                break
+                
+            word_bytes = data_bytes[i : i + length]
+            i += length
+            yield word_bytes.decode('utf-8', errors='ignore')
+        except IndexError:
+            # El stream de bytes se cortó a mitad de una palabra
+            print(f"Advertencia: Stream de datos incompleto durante el parseo.")
+            break
 
 async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict):
     client_address = writer.get_extra_info("peername")

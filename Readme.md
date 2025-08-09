@@ -31,6 +31,13 @@ Un servicio robusto para la gestión y monitoreo de dispositivos MikroTik, dise�
     sudo apt-get install -f
     ```
 
+    puedes ejecutar 
+
+    ```bash
+    sudo apt install ./mikrotik-manager_1.0.0_all.deb
+    ```
+    en lugar de el paso 1 para evitar el paso 3
+
 El servicio se iniciará automáticamente.
 
 ## Configuración y Uso

@@ -115,7 +115,8 @@ def create_web_app(app_controller):
             # 👆 --- FIN DEL CAMBIO --- 👆
 
         except Exception as e:
-            # ... (manejo de errores)
+            db_session.rollback()
+            flash(f'Error al eliminar dispositivo: {str(e)}', 'danger')
         finally:
             db_session.close()
         
@@ -195,7 +196,8 @@ def create_web_app(app_controller):
             
             return redirect(url_for('devices'))
         except Exception as e:
-            # ... (manejo de errores)
+            db_session.rollback()
+            flash(f'Error al eliminar dispositivo: {str(e)}', 'danger')
         finally:
             db.close()
     @app.route('/devices_table')
@@ -230,7 +232,8 @@ def create_web_app(app_controller):
                 flash(f'Dispositivo {device.name} eliminado.', 'danger')
                 # La llamada a notify_reload_configs() ya se eliminó
         except Exception as e:
-            # ... (manejo de errores)
+            db_session.rollback()
+            flash(f'Error al eliminar dispositivo: {str(e)}', 'danger')
         finally:
             db_session.close()
 

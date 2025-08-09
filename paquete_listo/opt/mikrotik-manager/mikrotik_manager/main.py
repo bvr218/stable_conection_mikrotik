@@ -35,6 +35,43 @@ class AppController:
         self.flow_processor = FlowProcessor(self.db_manager, self.status)
         self.background_tasks = []
         atexit.register(self.nfcapd_manager.stop)
+    
+    def add_mikrotik_service(self, config):
+        """Inicia los servicios para un único dispositivo nuevo."""
+        self.console.print(f"[bold green]Iniciando servicios para el nuevo dispositivo: {config['name']}[/bold green]")
+        # Usamos run_coroutine_threadsafe porque esta función es llamada desde el hilo de Flask
+        asyncio.run_coroutine_threadsafe(self.proxy_server.start_one(config), self.loop)
+        asyncio.run_coroutine_threadsafe(self.nfcapd_manager.start_one(config), self.loop)
+
+    def remove_mikrotik_service(self, device_id):
+        """Detiene los servicios para un dispositivo eliminado."""
+        self.console.print(f"[bold red]Deteniendo servicios para el dispositivo ID: {device_id}[/bold red]")
+        asyncio.run_coroutine_threadsafe(self.proxy_server.stop_one(device_id), self.loop)
+        asyncio.run_coroutine_threadsafe(self.nfcapd_manager.stop_one(device_id), self.loop)
+        # Limpiamos el estado para que desaparezca de la UI
+        if device_id in self.status:
+            del self.status[device_id]
+
+
+    def update_mikrotik_service(self, config):
+        """Reinicia los servicios para un dispositivo actualizado."""
+        device_id = config['id']
+        self.console.print(f"[bold yellow]Reiniciando servicios para el dispositivo actualizado: {config['name']}[/bold yellow]")
+        # Primero detenemos el servicio existente
+        future_stop_proxy = asyncio.run_coroutine_threadsafe(self.proxy_server.stop_one(device_id), self.loop)
+        future_stop_nfcapd = asyncio.run_coroutine_threadsafe(self.nfcapd_manager.stop_one(device_id), self.loop)
+        
+        # Esperamos a que se detengan para evitar conflictos de puertos
+        future_stop_proxy.result()
+        future_stop_nfcapd.result()
+
+        # Luego iniciamos los servicios con la nueva configuración
+        future_start_proxy = asyncio.run_coroutine_threadsafe(self.proxy_server.start_one(config), self.loop)
+        future_start_nfcapd = asyncio.run_coroutine_threadsafe(self.nfcapd_manager.start_one(config), self.loop)
+        
+        # Esperamos a que inicien
+        future_start_proxy.result()
+        future_start_nfcapd.result()
 
     async def run_background_services(self):
         """Inicia todos los servicios de fondo."""

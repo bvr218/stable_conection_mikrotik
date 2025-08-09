@@ -78,15 +78,11 @@ def create_web_app(app_controller):
     @login_required
     def add_device():
         db_session = SessionLocal()
-        
-        existing_device = db_session.query(MikrotikDevice).filter_by(name=request.form['name']).first()
-        if existing_device:
-            flash(f'Ya existe un dispositivo con el nombre "{request.form["name"]}".', 'danger')
-            db_session.close()
-            return redirect(url_for('index'))
+        # ... (código para verificar si el dispositivo existe)
 
         next_port = app_controller.config_manager.find_next_available_port()
         new_device = MikrotikDevice(
+            # ... (atributos del nuevo dispositivo)
             name=request.form['name'],
             id=request.form['id'],
             host=request.form['host'],
@@ -100,10 +96,26 @@ def create_web_app(app_controller):
         try:
             db_session.commit()
             flash(f'Dispositivo {new_device.name} agregado exitosamente.', 'success')
-            notify_reload_configs()
+            
+            # 👇 --- CAMBIO AQUÍ --- 👇
+            # Creamos un diccionario con la config del nuevo dispositivo
+            new_config = {
+                'id': new_device.id,
+                'name': new_device.name,
+                'host': new_device.host,
+                'port': new_device.port,
+                'user': new_device.user,
+                'password': new_device.password,
+                'proxy_port': new_device.proxy_port,
+                'netflow_enabled': new_device.netflow_enabled,
+                'enabled': True # Asumimos que siempre está habilitado al crearlo
+            }
+            # Llamamos al nuevo método para iniciar solo este dispositivo
+            Thread(target=app_controller.add_mikrotik_service, args=(new_config,)).start()
+            # 👆 --- FIN DEL CAMBIO --- 👆
+
         except Exception as e:
-            db_session.rollback()
-            flash(f'Error al agregar dispositivo: {str(e)}', 'danger')
+            # ... (manejo de errores)
         finally:
             db_session.close()
         
@@ -155,26 +167,35 @@ def create_web_app(app_controller):
     def update_device(device_id):
         db = SessionLocal()
         device = db.query(MikrotikDevice).filter_by(id=device_id).first()
-
-        if not device:
-            db.close()
-            return jsonify({'error': 'Dispositivo no encontrado'}), 404
+        # ... (verificar si el dispositivo existe)
 
         device.name = request.form['name']
-        device.id = request.form['id']
-        device.host = request.form['host']
-        device.port = int(request.form['port'])
-        device.user = request.form['user']
+        # ... (actualizar los demás campos)
         device.password = request.form['password']
         device.netflow_enabled = 'netflow_enabled' in request.form
 
         try:
             db.commit()
-            notify_reload_configs()
-            return redirect(url_for('devices'))  # o return '', 204 para AJAX
+            
+            # 👇 --- CAMBIO AQUÍ --- 👇
+            updated_config = {
+                'id': device.id,
+                'name': device.name,
+                'host': device.host,
+                'port': device.port,
+                'user': device.user,
+                'password': device.password,
+                'proxy_port': device.proxy_port,
+                'netflow_enabled': device.netflow_enabled,
+                'enabled': True
+            }
+            # Llamamos al nuevo método para reiniciar solo este dispositivo
+            Thread(target=app_controller.update_mikrotik_service, args=(updated_config,)).start()
+            # 👆 --- FIN DEL CAMBIO --- 👆
+            
+            return redirect(url_for('devices'))
         except Exception as e:
-            db.rollback()
-            return jsonify({'error': str(e)}), 500
+            # ... (manejo de errores)
         finally:
             db.close()
     @app.route('/devices_table')
@@ -190,9 +211,15 @@ def create_web_app(app_controller):
         # Aquí renderizas solo el bloque HTML de estado
         status_data = get_services_status()  # tu función personalizada
         return render_template('partials/services_status.html', status=status_data)
+        
     @app.route('/delete_device/<int:device_id>', methods=['POST'])
     @login_required
     def delete_device(device_id):
+        # 👇 --- CAMBIO AQUÍ --- 👇
+        # Llamamos al método para detener los servicios ANTES de borrar de la DB
+        Thread(target=app_controller.remove_mikrotik_service, args=(device_id,)).start()
+        # 👆 --- FIN DEL CAMBIO --- 👆
+        
         db_session = SessionLocal()
         device = db_session.query(MikrotikDevice).filter_by(id=device_id).first()
 
@@ -201,14 +228,13 @@ def create_web_app(app_controller):
                 db_session.delete(device)
                 db_session.commit()
                 flash(f'Dispositivo {device.name} eliminado.', 'danger')
-                notify_reload_configs()
+                # La llamada a notify_reload_configs() ya se eliminó
         except Exception as e:
-            db_session.rollback()
-            flash(f'Error al eliminar dispositivo: {str(e)}', 'danger')
+            # ... (manejo de errores)
         finally:
             db_session.close()
-        # Aquí deberías notificar al servicio principal para que detenga el proxy
-        return redirect(url_for('index'))
+
+        return redirect(url_for('devices')) # Se redirige a 'devices' que es la vista principal ahora
 
     @app.route('/save_db_config', methods=['POST'])
     @login_required
@@ -222,9 +248,22 @@ def create_web_app(app_controller):
             config_item.value = request.form[key]
         db_session.commit()
         db_session.close()
-        flash('Configuración de la base de datos guardada. El servicio intentará reconectar.', 'success')
-        # Notificar al servicio para que reconecte a la DB
-        return redirect(url_for('index'))
+
+        flash('Configuración de la base de datos guardada. Reconectando...', 'success')
+
+        # 🔹 Reconectar la base de datos sin reiniciar todo el programa
+        def reconnect_db():
+            loop = app_controller.loop
+            asyncio.run_coroutine_threadsafe(
+                app_controller.db_manager.close(), loop
+            ).result()  # cerrar conexión anterior
+            asyncio.run_coroutine_threadsafe(
+                app_controller.db_manager.connect(), loop
+            ).result()  # conectar con la nueva config
+
+        Thread(target=reconnect_db).start()
+
+        return redirect(url_for('index'))       
 
     @app.route('/api/devices')
     @login_required

@@ -1,17 +1,17 @@
 #!/bin/bash
 # Este script construye el paquete .deb
 
-# 1. Asegurarse de que el directorio de compilación esté limpio
-rm -f mikrotik-manager.deb
+# 1. Entra al directorio, compila con Nuitka y vuelve al directorio original
+(cd debian/opt/mikrotik-manager && python3 -m nuitka \
+    --standalone \
+    --onefile \
+    --include-data-dir=mikrotik_manager/web/templates=web/templates \
+    mikrotik_manager/main.py)
 
-# 2. Establecer permisos correctos para los scripts de instalación
-chmod 0755 debian/DEBIAN/postinst
-chmod 0755 debian/DEBIAN/prerm
+# 2. Ahora, desde ./, ejecuta el script de preparación
+echo "Ejecutando preparar.sh desde $(pwd)..."
+bash preparar.sh
 
-# 3. Construir el paquete
-dpkg-deb --build debian
-
-# 4. Renombrar el paquete para incluir la versión (opcional)
-mv debian.deb mikrotik-manager_1.0.0_all.deb
-
-echo "Paquete 'mikrotik-manager_1.0.0_all.deb' creado exitosamente."
+# 3. Finalmente, construye el paquete .deb desde ./
+echo "Construyendo el paquete .deb desde $(pwd)..."
+dpkg-deb --build paquete_listo

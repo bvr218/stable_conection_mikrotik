@@ -45,6 +45,23 @@ class NfcapdManager:
             subprocess.run(['pkill', 'nfcapd'], capture_output=True)
         self.status['nfcapd'] = "<b style='color:red'>Detenido</b>"
 
+    async def start_one(self, config):
+        """
+        Dispara una sincronización para incluir un nuevo dispositivo.
+        Dado que nfcapd requiere un reinicio para agregar fuentes, llamamos a sync().
+        """
+        device_name = config.get('name', 'N/A')
+        print(f"NfcapdManager: Solicitud para iniciar/agregar '{device_name}'. Sincronizando servicio...")
+        await self.sync()
+
+    # --- MÉTODO NUEVO AGREGADO ---
+    async def stop_one(self, device_id):
+        """
+        Dispara una sincronización para eliminar un dispositivo.
+        Llamamos a sync() para reiniciar el servicio sin la fuente eliminada.
+        """
+        print(f"NfcapdManager: Solicitud para detener el dispositivo ID {device_id}. Sincronizando servicio...")
+        await self.sync()
     async def stop_all(self):
         for process in self.processes:
             process.terminate()

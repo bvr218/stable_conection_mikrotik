@@ -3,21 +3,29 @@ import socket
 import functools
 from librouteros import connect
 import json
+import traceback
 from librouteros.query import Key, And, Or
 
-from librouteros.exceptions import TrapError
+from config import ConfigManager, QueuedCommand 
+from sqlalchemy.orm import Session
 
+from librouteros.exceptions import TrapError, MultiTrapError
+INSTANT_COMMANDS = {'print', 'getall','monitor-traffic'}
+
+MAX_RETRIES=5
 # --------------------------------------------------------------------------
 # Clase de conexión persistente al MikroTik vía API (librouteros)
 # --------------------------------------------------------------------------
 class PersistentConnection:
-    def __init__(self, config, device_id, status_dict):
+    def __init__(self, config, device_id, status_dict, config_manager: ConfigManager):
         self.config = config
         self.device_id = device_id
         self.status_dict = status_dict
+        self.config_manager = config_manager # Guardamos el gestor
         self.api = None
         self.connected = asyncio.Event()
         self.connection_task = None
+        self.api_lock = asyncio.Lock()
 
     async def connect_loop(self):
         while True:
@@ -42,14 +50,18 @@ class PersistentConnection:
                 while True:
                     await asyncio.sleep(10)
                     try:
-                        await loop.run_in_executor(None, lambda: list(self.api(cmd='/system/resource/print')))
+                        async with self.api_lock: # <--- AÑADE ESTA LÍNEA
+                            # El código de adentro ahora está protegido
+                            await loop.run_in_executor(None, lambda: list(self.api(cmd='/system/resource/print')))
                     except (TrapError, MultiTrapError, OSError) as e:
                         raise ConnectionError(f"Conexión perdida: {e}")
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.status_dict[self.device_id] = f"Error de conexión: {e,self.config}"
+                print(f"❌ Error conectando a {self.config['host']}:{self.config.get('port',8728)}")
+                traceback.print_exc()
+                self.status_dict[self.device_id] = f"Error de conexión: {e}"
 
             self.connected.clear()
             self.api = None
@@ -60,6 +72,28 @@ class PersistentConnection:
     def start(self):
         if not self.connection_task:
             self.connection_task = asyncio.create_task(self.connect_loop())
+
+    async def queue_command_for_execution(self, words: list):
+        """
+        Guarda el comando en la base de datos en lugar de ejecutarlo.
+        """
+        try:
+            db_session: Session = self.config_manager.get_db_session()
+            
+            new_command = QueuedCommand(
+                device_id=self.device_id,
+                command_data=json.dumps(words),
+                status='pending'
+            )
+            
+            db_session.add(new_command)
+            db_session.commit()
+            db_session.close()
+            print(f"✅ Comando encolado para el dispositivo {self.device_id}: {words}")
+            return True
+        except Exception as e:
+            print(f"🚨 Error al encolar comando: {e}")
+            return False
 
     async def stop(self):
         if self.connection_task:
@@ -114,6 +148,38 @@ class PersistentConnection:
 
                     words.clear()
                     words.extend(new_words)
+
+                if words and words[0] == '/ip/firewall/filter/add' or words[0] == '/ip/firewall/nat/add':
+                    # Buscamos el parámetro dst-address
+                    for i, part in enumerate(words):
+                        if part.startswith('=dst-address='):
+                            # Obtenemos el valor (ej: 'clientes.hachenet.com/')
+                            value = part.split('=', 2)[2]
+                            
+                            # Verificamos si NO parece una IP (si contiene letras)
+                            # y limpiamos el valor para la consulta DNS.
+                            hostname = value.strip('/')
+                            is_ip = hostname.replace('.', '').isdigit()
+
+                            if not is_ip:
+                                print(f"🔍 Se detectó un nombre de dominio en dst-address: '{hostname}'. Resolviendo...")
+                                try:
+                                    # Hacemos la consulta DNS (esto es bloqueante, pero
+                                    # ya estamos dentro de run_in_executor, así que está bien)
+                                    resolved_ip = socket.gethostbyname(hostname)
+                                    print(f"✅ Dominio resuelto: {hostname} -> {resolved_ip}")
+                                    
+                                    # Reemplazamos el valor en la lista de comandos
+                                    words[i] = f'=dst-address={resolved_ip}'
+                                
+                                except socket.gaierror:
+                                    # Si la resolución DNS falla, no podemos continuar.
+                                    # Lanzamos una excepción que será capturada afuera.
+                                    print(f"❌ Error: No se pudo resolver el dominio '{hostname}'.")
+                                    raise ValueError(f"Fallo en la resolución DNS para: {hostname}")
+
+                            # Una vez encontrado y procesado, rompemos el bucle
+                            break 
 
                 # --- Procesamiento general del comando ---
                 full_command_path = words[0]
@@ -185,8 +251,8 @@ class PersistentConnection:
                 # Convertimos el generador a una lista para enviarlo
                 return list(result)
                 # ### FIN DEL CAMBIO ###
-
-            return await loop.run_in_executor(None, execute)
+            async with self.api_lock:
+                return await loop.run_in_executor(None, execute)
 
         except TrapError as e:
             return [{"error": f"Trap: {e.message}"}]
@@ -308,7 +374,7 @@ def parse_api_words(data_bytes):
             print(f"Advertencia: Stream de datos incompleto durante el parseo.")
             break
 
-async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict):
+async def handle_client(reader, writer, *, p_conn: PersistentConnection, lock, device_id, status_dict, config_manager: ConfigManager):
     client_address = writer.get_extra_info("peername")
     print(f"[API Cliente {client_address}] Conectado")
 
@@ -325,15 +391,12 @@ async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict)
 
             while b'\x00' in command_buffer_bytes:
                 full_command_bytes, command_buffer_bytes = command_buffer_bytes.split(b'\x00', 1)
-
                 words = list(parse_api_words(full_command_bytes))
 
                 if not words:
                     continue
 
-                print(f"[API Cliente {client_address}] Palabras procesadas: {words}")
-
-                # Validar login con usuario/contraseña del dispositivo
+                # ... (Lógica de login sin cambios) ...
                 if not login_confirmed and '/login' in words:
                     print(f"[API Cliente {client_address}] Login detectado. Verificando credenciales...")
 
@@ -363,29 +426,46 @@ async def handle_client(reader, writer, *, p_conn, lock, device_id, status_dict)
                         writer.write(response_bytes)
                         await writer.drain()
                         break  # Cierra la conexión si el login falla
-
+                ### ### LÓGICA DE COMANDOS MODIFICADA ### ###
                 elif login_confirmed:
-                    print(f"[API Cliente {client_address}] Pasando comando a MikroTik: {words}")
-                    async with lock:
-                        result = await p_conn.run_command(words)
-                        print(f"Respuesta de MikroTik (Python): {result}")
+                    # No necesitamos la lista INSTANT_COMMANDS con esta nueva lógica
+                    
+                    print(f"[API Cliente {client_address}] Intentando ejecutar comando: {words}")
+                    
+                    # 1. Intenta ejecutar el comando UNA SOLA VEZ
+                    result = await p_conn.run_command(words)
 
-                    response_bytes = b""
-                    if result and isinstance(result, list) and 'error' in result[0]:
-                        # --- LÓGICA CORREGIDA ---
-                        error_msg = result[0]['error']
-                        print(f"[Proxy] Enviando error al cliente: {error_msg}")
-                        # Usamos la nueva función que añade !trap y !done
-                        response_bytes = encode_mikrotik_error(error_msg)
+                    # 2. Verifica si el resultado contiene un error
+                    is_error = result and isinstance(result, list) and 'error' in result[0]
+
+                    if not is_error:
+                        # 3. ÉXITO: El comando funcionó. Devolvemos el resultado al cliente.
+                        print(f"✅ Comando ejecutado con éxito. Enviando respuesta al cliente.")
+                        response_bytes = encode_mikrotik_response(result or [])
+                        writer.write(response_bytes)
+                        await writer.drain()
                     else:
-                        # --- LÓGICA DE ÉXITO (sin cambios) ---
-                        print(f"[Proxy] Codificando respuesta exitosa para el cliente.")
-                        response_bytes = encode_mikrotik_response(result)
+                        # 4. FALLO: El comando falló. Lo encolamos en la base de datos.
+                        error_msg = result[0]['error']
+                        print(f"⚠️ El comando falló con error '{error_msg}'. Encolando para reintentar más tarde.")
 
-               
+                        # Llama a la función que guarda el comando en la base de datos
+                        success_queuing = await p_conn.queue_command_for_execution(words)
 
-                    writer.write(response_bytes)
-                    await writer.drain()
+                        if success_queuing:
+                            # Informamos al cliente que el comando fue aceptado pero falló y se reintentará.
+                            # Un !trap es ideal para esto, ya que es un mensaje de error no fatal.
+                            info_msg = f"Command failed but was queued for a later retry. Error: {error_msg}"
+                            response_bytes = encode_mikrotik_error(info_msg)
+                            # Agregamos !done para que el cliente finalice la comunicación correctamente.
+                            response_bytes += encode_word("!done") + b'\x00'
+                        else:
+                            # Fallo crítico: No se pudo ejecutar NI encolar. Esto es un problema serio.
+                            critical_error_msg = "FATAL: Command failed and could not be queued."
+                            response_bytes = encode_mikrotik_error(critical_error_msg)
+
+                        writer.write(response_bytes)
+                        await writer.drain()
 
     except ConnectionResetError:
         pass
@@ -414,17 +494,20 @@ class ProxyServer:
 
     async def start_one(self, config):
         device_id = config['id']
-        p_conn = PersistentConnection(config, device_id, self.status)
+        # ### MODIFICADO: Pasar config_manager a PersistentConnection ###
+        p_conn = PersistentConnection(config, device_id, self.status, self.config_manager)
         self.persistent_conns[device_id] = p_conn
         p_conn.start()
         self.conn_locks[device_id] = asyncio.Lock()
         try:
+            # ### MODIFICADO: Pasar config_manager a handle_client ###
             handler = functools.partial(
                 handle_client, 
                 p_conn=p_conn, 
                 lock=self.conn_locks[device_id],
                 device_id=device_id, 
-                status_dict=self.status
+                status_dict=self.status,
+                config_manager=self.config_manager # <--- Añadido
             )
             server = await asyncio.start_server(handler, '127.0.0.1', config['proxy_port'])
             self.server_tasks[device_id] = asyncio.create_task(server.serve_forever())

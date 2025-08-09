@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 import random
 import time
+import uuid
 
 NFDUMP_PATH = shutil.which('nfdump')
 NFCAPD_CAPTURE_BASE_DIR = '/var/www/html/flows'
@@ -185,7 +186,7 @@ class FlowProcessor:
             (
                 service_update['id'], service_update['idcliente'], service_update['ip'], start_time,
                 service_update['totalup'], service_update['totaldown'],
-                f"{random.randint(1,9)}{int(time.time())}{random.randint(10,99)}",
+                uuid.uuid4().hex,
                 'self', service_update.get('mac'), 'API_PYTHON_SERVICE'
             )
         )

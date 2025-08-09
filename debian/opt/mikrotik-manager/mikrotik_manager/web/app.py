@@ -1,10 +1,10 @@
 # web/app.py
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
-from mikrotik_manager.config import SessionLocal, MikrotikDevice, ServiceConfig, User
+from mikrotik_manager.config import SessionLocal, MikrotikDevice, ServiceConfig, User,QueuedCommand
 from werkzeug.security import check_password_hash
 from functools import wraps
 from threading import Thread
-
+from math import ceil
 
 
 
@@ -128,6 +128,88 @@ def create_web_app(app_controller):
     def device_status():
         return render_template('partials/device_status.html', status=app_controller.status)
 
+    ### --- 👇 INICIO DEL CAMBIO: RUTA /queue MODIFICADA --- ###
+    @app.route('/queue/clear', methods=['POST'])
+    @login_required
+    def clear_queue():
+        """
+        Elimina TODOS los comandos de la tabla QueuedCommand.
+        """
+        db_session = SessionLocal()
+        try:
+            # El método delete() devuelve el número de filas afectadas
+            num_deleted = db_session.query(QueuedCommand).delete()
+            db_session.commit()
+            if num_deleted > 0:
+                flash(f'Se han eliminado {num_deleted} comandos de la cola.', 'success')
+            else:
+                flash('La cola ya estaba vacía.', 'info')
+
+        except Exception as e:
+            db_session.rollback()
+            flash(f'Error al intentar vaciar la cola: {str(e)}', 'danger')
+        finally:
+            db_session.close()
+    
+        return redirect(url_for('queue'))
+    @app.route('/queue')
+    @login_required
+    def queue():
+        db_session = SessionLocal()
+        
+        # 2. Lógica de paginación
+        page = request.args.get('page', 1, type=int)
+        PER_PAGE = 20 # Elementos por página
+        
+        # Consulta base para reutilizar
+        base_query = db_session.query(QueuedCommand, MikrotikDevice.name)\
+            .join(MikrotikDevice, QueuedCommand.device_id == MikrotikDevice.id)
+
+        # Obtenemos el total de registros para calcular las páginas
+        total_commands = base_query.count()
+        total_pages = ceil(total_commands / PER_PAGE)
+
+        # Obtenemos solo los comandos para la página actual
+        offset = (page - 1) * PER_PAGE
+        query_result = base_query.order_by(QueuedCommand.created_at.desc())\
+            .limit(PER_PAGE)\
+            .offset(offset)\
+            .all()
+        
+        db_session.close()
+
+        # Procesamos los resultados para facilitar su uso en la plantilla
+        commands = []
+        for cmd, device_name in query_result:
+            last_error = ""
+            if cmd.error_history:
+                try:
+                    # Obtenemos el último error del historial
+                    history = json.loads(cmd.error_history)
+                    if history:
+                        last_error = history[-1].get('error', 'Error no registrado')
+                except:
+                    last_error = "No se pudo parsear el historial de errores."
+            
+            commands.append({
+                'id': cmd.id,
+                'device_name': device_name,
+                'status': cmd.status,
+                'command_data': cmd.command_data,
+                'retry_count': cmd.retry_count,
+                'created_at': cmd.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'last_error': last_error
+            })
+        
+        # 3. Pasamos los datos de paginación a la plantilla
+        return render_template(
+            'queue.html', 
+            commands=commands, 
+            page=page, 
+            total_pages=total_pages
+        )
+    ### --- 👆 FIN DEL CAMBIO --- ###
+
     @app.route('/devices')
     @login_required
     def devices():
@@ -171,7 +253,12 @@ def create_web_app(app_controller):
         # ... (verificar si el dispositivo existe)
 
         device.name = request.form['name']
-        # ... (actualizar los demás campos)
+        device.host = request.form['host']
+        device.port = int(request.form['port'])
+        device.user = request.form['user']
+        device.password = request.form['password']
+        device.netflow_enabled = 'netflow_enabled' in request.form
+
         device.password = request.form['password']
         device.netflow_enabled = 'netflow_enabled' in request.form
 

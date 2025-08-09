@@ -30,6 +30,10 @@ echo "   - Binario '$SOURCE_BIN' copiado."
 cp -r debian/* "$DEST_DIR/"
 echo "   - Carpeta 'debian' copiada."
 
+rm -r "$DEST_DIR/opt/mikrotik-manager/mikrotik_manager"
+echo "   - Carpeta base eliminada."
+
+
 # 3. AJUSTAR LA CONFIGURACIÓN DE DEBIAN DENTRO DEL NUEVO DIRECTORIO
 echo -e "\n📦 Paso 3: Ajustando la configuración de Debian para el binario..."
 

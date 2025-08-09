@@ -1,8 +1,10 @@
 # config.py
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData
+# from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Text, DateTime, ForeignKey
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
+import datetime
 # from .base import Base
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -40,6 +42,27 @@ class User(Base):
             db.commit()
         db.close()
 
+class QueuedCommand(Base):
+    __tablename__ = "queued_commands"
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(Integer, ForeignKey('mikrotik_devices.id'), nullable=False)
+    command_data = Column(Text, nullable=False) 
+    
+    # Estados: pending, processing, completed, failed
+    status = Column(String, default='pending', nullable=False, index=True) 
+    result = Column(Text) 
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    processed_at = Column(DateTime)
+    
+    ### --- CAMPOS NUEVOS --- ###
+    
+    # Contador para los reintentos
+    retry_count = Column(Integer, default=0, nullable=False)
+    
+    # Un campo de texto para guardar un JSON con el historial de errores
+    error_history = Column(Text) 
+
+
 class MikrotikDevice(Base):
     __tablename__ = "mikrotik_devices"
     id = Column(Integer, primary_key=True, index=True)
@@ -64,6 +87,10 @@ Base.metadata.create_all(bind=engine)
 class ConfigManager:
     def __init__(self):
         self.db_session = SessionLocal()
+
+    def get_db_session(self):
+        """Provee una nueva sesión de DB para los workers."""
+        return SessionLocal()
 
     def get_mikrotik_configs(self):
         devices = self.db_session.query(MikrotikDevice).filter_by(enabled=True).all()

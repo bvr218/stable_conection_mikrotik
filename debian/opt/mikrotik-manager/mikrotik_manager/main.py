@@ -13,11 +13,13 @@ import atexit
 from threading import Thread
 from rich.console import Console
 
+
 # from mikrotik_manager.config import ConfigManager
 
 from config import ConfigManager
 from database import DatabaseManager
 from nfcapd import NfcapdManager
+from command_processor import CommandQueueProcessor
 from processor import FlowProcessor
 from proxy import ProxyServer
 from web.app import create_web_app
@@ -32,9 +34,10 @@ class AppController:
         self.db_manager = DatabaseManager(self.config_manager, self.status)
         self.nfcapd_manager = NfcapdManager(self.config_manager, self.status)
         self.proxy_server = ProxyServer(self.config_manager, self.status)
+        self.command_processor = CommandQueueProcessor(self.config_manager, self.proxy_server, self.status)
         self.flow_processor = FlowProcessor(self.db_manager, self.status)
         self.background_tasks = []
-        atexit.register(self.nfcapd_manager.stop)
+        atexit.register(self.nfcapd_manager.stop_all)
     
     def add_mikrotik_service(self, config):
         """Inicia los servicios para un único dispositivo nuevo."""
@@ -80,6 +83,8 @@ class AppController:
         # Obtiene las configuraciones desde la nueva base de datos de config
         self.proxy_server.configs = self.config_manager.get_mikrotik_configs()
         self.nfcapd_manager.configs = self.config_manager.get_mikrotik_configs()
+
+        
         
         await self.db_manager.connect()
         await self.nfcapd_manager.sync()
@@ -87,6 +92,9 @@ class AppController:
 
         processor_task = asyncio.create_task(self.flow_processor.run_periodically())
         self.background_tasks.append(processor_task)
+
+        cmd_processor_task = asyncio.create_task(self.command_processor.run())
+        self.background_tasks.append(cmd_processor_task)
         
         self.console.print("[bold cyan]Servicios de fondo iniciados.[/bold cyan]")
         await self.shutdown_event.wait()

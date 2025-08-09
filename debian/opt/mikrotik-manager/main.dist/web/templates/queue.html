@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+
+{% block title %}Cola de Comandos{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Cola de Ejecución de Comandos</h2>
+    </div>
+    
+    <p>Mostrando comandos de la página {{ page }} de {{ total_pages }}.</p>
+
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="thead-dark">
+                <tr>
+                    <th>ID</th>
+                    <th>Dispositivo</th>
+                    <th>Estado</th>
+                    <th>Comando</th>
+                    <th>Intentos</th>
+                    <th>Creado</th>
+                    <th>Último Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cmd in commands %}
+                <tr>
+                    <td>{{ cmd.id }}</td>
+                    <td>{{ cmd.device_name }}</td>
+                    <td>
+                        {% if cmd.status == 'completed' %}
+                            <span class="badge bg-success">Completado</span>
+                        {% elif cmd.status == 'failed' and cmd.retry_count >= 4 %}
+                            <span class="badge bg-danger">Fallido</span>
+                        {% elif cmd.status == 'failed' %}
+                            <span class="badge bg-warning text-dark">Reintentando</span>
+                        {% elif cmd.status == 'processing' %}
+                            <span class="badge bg-info">Procesando</span>
+                        {% else %}
+                            <span class="badge bg-secondary">Pendiente</span>
+                        {% endif %}
+                    </td>
+                    <td><pre style="margin: 0; white-space: pre-wrap; word-break: break-all;"><code>{{ cmd.command_data }}</code></pre></td>
+                    <td>{{ cmd.retry_count }} / 4</td>
+                    <td>{{ cmd.created_at }}</td>
+                    <td class="text-danger"><small>{{ cmd.last_error }}</small></td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center">No hay comandos en la cola.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if total_pages > 1 %}
+    <nav aria-label="Navegación de comandos">
+        <ul class="pagination justify-content-center">
+            
+            <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('queue', page=page-1) }}">Anterior</a>
+            </li>
+            
+            {% for p in range(1, total_pages + 1) %}
+                {% if p == page %}
+                    <li class="page-item active" aria-current="page">
+                        <span class="page-link">{{ p }}</span>
+                    </li>
+                {% else %}
+                    <li class="page-item">
+                        <a class="page-link" href="{{ url_for('queue', page=p) }}">{{ p }}</a>
+                    </li>
+                {% endif %}
+            {% endfor %}
+
+            <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                <a class="page-link" href="{{ url_for('queue', page=page+1) }}">Siguiente</a>
+            </li>
+        </ul>
+    </nav>
+    {% endif %}
+    </div>
+{% endblock %}

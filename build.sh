@@ -6,6 +6,7 @@
     --standalone \
     --onefile \
     --include-data-dir=mikrotik_manager/web/templates=web/templates \
+    --include-data-dir=mikrotik_manager/web/static=web/static \
     mikrotik_manager/main.py)
 
 # 2. Ahora, desde ./, ejecuta el script de preparación

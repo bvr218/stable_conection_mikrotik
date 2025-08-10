@@ -3,6 +3,7 @@ import socket
 import functools
 from librouteros import connect
 import json
+import time
 import traceback
 from librouteros.query import Key, And, Or
 
@@ -26,6 +27,7 @@ class PersistentConnection:
         self.connected = asyncio.Event()
         self.connection_task = None
         self.api_lock = asyncio.Lock()
+        self.last_live_activity_ts = 0
 
     async def connect_loop(self):
         while True:
@@ -417,6 +419,7 @@ async def handle_client(reader, writer, *, p_conn: PersistentConnection, lock, d
 
             while b'\x00' in command_buffer_bytes:
                 full_command_bytes, command_buffer_bytes = command_buffer_bytes.split(b'\x00', 1)
+                p_conn.last_live_activity_ts = time.time()
                 words = list(parse_api_words(full_command_bytes))
 
                 if not words:
@@ -473,25 +476,31 @@ async def handle_client(reader, writer, *, p_conn: PersistentConnection, lock, d
                     else:
                         # 4. FALLO: El comando falló. Lo encolamos en la base de datos.
                         error_msg = result[0]['error']
-                        print(f"⚠️ El comando falló con error '{error_msg}'. Encolando para reintentar más tarde.")
-
-                        # Llama a la función que guarda el comando en la base de datos
-                        success_queuing = await p_conn.queue_command_for_execution(words)
-
-                        if success_queuing:
-                            # Informamos al cliente que el comando fue aceptado pero falló y se reintentará.
-                            # Un !trap es ideal para esto, ya que es un mensaje de error no fatal.
-                            info_msg = f"Command failed but was queued for a later retry. Error: {error_msg}"
-                            response_bytes = encode_mikrotik_error(info_msg)
-                            # Agregamos !done para que el cliente finalice la comunicación correctamente.
-                            response_bytes += encode_word("!done") + b'\x00'
+                        if error_msg.startswith('Trap:'):
+                            # SUBCASO A: Es un error de TRAP (lógico).
+                            # NO VAMOS A ENCOLAR. Devolvemos el error al cliente.
+                            print(f"❌ Comando rechazado por MikroTik (Trap): {error_msg}. No se encolará.")
+                            response_bytes = encode_mikrotik_error(error_msg)
+                            writer.write(response_bytes)
+                            await writer.drain()
                         else:
-                            # Fallo crítico: No se pudo ejecutar NI encolar. Esto es un problema serio.
-                            critical_error_msg = "FATAL: Command failed and could not be queued."
-                            response_bytes = encode_mikrotik_error(critical_error_msg)
+                            # SUBCASO B: Es un error de conexión, timeout, o del sistema.
+                            # ESTO SÍ LO VAMOS A ENCOLAR.
+                            print(f"⚠️ El comando falló por un error de sistema/conexión: '{error_msg}'. Encolando para reintentar.")
+                            
+                            success_queuing = await p_conn.queue_command_for_execution(words)
 
-                        writer.write(response_bytes)
-                        await writer.drain()
+                            if success_queuing:
+                                # Informamos al cliente que el comando fue aceptado pero falló y se reintentará.
+                                info_msg = f"Command failed but was queued for later. Error: {error_msg}"
+                                response_bytes = encode_mikrotik_error(info_msg)
+                            else:
+                                # Fallo crítico: No se pudo ejecutar NI encolar.
+                                critical_error_msg = "FATAL: Command failed and could not be queued."
+                                response_bytes = encode_mikrotik_error(critical_error_msg)
+
+                            writer.write(response_bytes)
+                            await writer.drain()
 
     except ConnectionResetError:
         pass

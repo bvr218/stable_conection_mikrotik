@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from config import QueuedCommand, ConfigManager
 
 MAX_RETRIES = 4
+LIVE_CLIENT_IDLE_TIMEOUT = 15 
 
 class CommandQueueProcessor:
     def __init__(self, config_manager: ConfigManager, proxy_server, status_dict: dict):
@@ -58,6 +59,17 @@ class CommandQueueProcessor:
                         # No eliminamos aquí, podría ser un fallo temporal de conexión del proxy.
                         # Dejamos que el sistema reintente.
                         continue
+
+                     # --- INICIO: Lógica de Prioridad del Cliente en Vivo ---
+                    idle_time = time.time() - p_conn.last_live_activity_ts
+                    
+                    if idle_time < LIVE_CLIENT_IDLE_TIMEOUT:
+                        # Ha habido actividad reciente, damos prioridad al cliente.
+                        # No procesamos este comando ahora. Lo saltamos.
+                        # Volverá a ser seleccionado en el próximo ciclo si el cliente ya está inactivo.
+                        print(f"⏸️ [Command Processor] Cliente en vivo detectado en {p_conn.config['host']}. Pausando cola para este dispositivo.")
+                        continue # Salta al siguiente comando en la lista
+                    # --- FIN: Lógica de Prioridad ---
                     
                     try:
                         words = json.loads(cmd.command_data)

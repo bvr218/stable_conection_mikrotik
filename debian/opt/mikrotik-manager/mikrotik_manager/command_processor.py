@@ -46,7 +46,7 @@ class CommandQueueProcessor:
                     time.sleep(2)  
                     continue
 
-                print(f"📦 [Command Processor] Procesando {len(commands_to_process)} comandos.")
+                # print(f"📦 [Command Processor] Procesando {len(commands_to_process)} comandos.")
 
                 for cmd in commands_to_process:
                     cmd.status = 'processing'
@@ -69,7 +69,7 @@ class CommandQueueProcessor:
                         # No procesamos este comando ahora. Lo saltamos.
                         cmd.status = 'pending'
                         # Volverá a ser seleccionado en el próximo ciclo si el cliente ya está inactivo.
-                        print(f"⏸️ [Command Processor] Cliente en vivo detectado en {p_conn.config['host']}. Pausando cola para este dispositivo.")
+                        # print(f"⏸️ [Command Processor] Cliente en vivo detectado en {p_conn.config['host']}. Pausando cola para este dispositivo.")
                         continue # Salta al siguiente comando en la lista
                     # --- FIN: Lógica de Prioridad ---
                     

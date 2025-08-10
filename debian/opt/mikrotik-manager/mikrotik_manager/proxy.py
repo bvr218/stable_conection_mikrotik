@@ -179,6 +179,20 @@ class PersistentConnection:
                                     raise ValueError(f"Fallo en la resolución DNS para: {hostname}")
 
                             # Una vez encontrado y procesado, rompemos el bucle
+                            break
+                if words and (words[0] == '/ppp/profile/add' or words[0] == '/ppp/profile/set'):
+                    # Buscamos si el comando incluye el parámetro 'local-address'
+                    for i, part in enumerate(words):
+                        if part.startswith('=local-address='):
+                            # Obtenemos la IP del host desde la configuración de la conexión
+                            mikrotik_host_ip = self.config['host']
+                            
+                            print(f"🔄 'local-address' detectado. Reemplazando valor por la IP del host: {mikrotik_host_ip}")
+                            
+                            # Reemplazamos la palabra completa en la lista de comandos
+                            words[i] = f'=local-address={mikrotik_host_ip}'
+                            
+                            # Rompemos el bucle una vez que lo hemos encontrado y reemplazado
                             break 
 
                 # --- Procesamiento general del comando ---
@@ -200,9 +214,21 @@ class PersistentConnection:
                         key, value = part[1:].split('=', 1)
                         filters.append((key, '=', value))
                     # Parámetros (add, set, etc.)
-                    elif part.startswith('=') and '=' in part[1:]:
-                        key, value = part[1:].split('=', 1)
-                        params[key] = value  # No cambiar guiones
+                    # elif part.startswith('=') and '=' in part[1:]:
+                    #     key, value = part[1:].split('=', 1)
+                    #     params[key] = value  # No cambiar guiones
+                    elif part.startswith('='):
+                        # Quita el primer '='. El resultado es "key=value" o solo "key"
+                        param_str = part[1:]
+                        
+                        # Divide en clave y valor. Si no hay '=', el valor será una cadena vacía.
+                        if '=' in param_str:
+                            key, value = param_str.split('=', 1)
+                        else:
+                            key = param_str
+                            value = "" # Asigna un valor vacío por defecto
+                            
+                        params[key] = value
 
                 # --- INICIO: CÓDIGO PARA IMPRIMIR EL COMANDO ANTES DE ENVIAR ---
                 debug_command_parts = [full_command_path]

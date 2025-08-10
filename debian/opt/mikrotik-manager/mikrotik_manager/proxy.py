@@ -458,6 +458,21 @@ async def handle_client(reader, writer, *, p_conn: PersistentConnection, lock, d
                 ### ### LÓGICA DE COMANDOS MODIFICADA ### ###
                 elif login_confirmed:
                     # No necesitamos la lista INSTANT_COMMANDS con esta nueva lógica
+
+                    if not p_conn.connected.is_set():
+                        # 🔌 No hay conexión → encolamos directamente
+                        print(f"⚠️ No hay conexión con {p_conn.config['host']}. Encolando comando.")
+                        success_queuing = await p_conn.queue_command_for_execution(words)
+
+                        # Respondemos al cliente como si se ejecutó (para que no se bloquee)
+                        if success_queuing:
+                            response_bytes = encode_word("!done") + b'\x00'
+                        else:
+                            response_bytes = encode_mikrotik_error("FATAL: Command could not be queued.")
+
+                        writer.write(response_bytes)
+                        await writer.drain()
+                        continue
                     
                     print(f"[API Cliente {client_address}] Intentando ejecutar comando: {words}")
                     

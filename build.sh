@@ -15,4 +15,4 @@ bash preparar.sh
 
 # 3. Finalmente, construye el paquete .deb desde ./
 echo "Construyendo el paquete .deb desde $(pwd)..."
-dpkg-deb --build paquete_listo
+dpkg-deb --build paquete_listo_latest

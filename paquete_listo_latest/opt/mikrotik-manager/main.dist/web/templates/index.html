@@ -1,0 +1,25 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="card">
+    <div class="card-header bg-dark text-white">
+        <h5 class="mb-0">Estado de Servicios</h5>
+    </div>
+    <div id="status-list">
+        {% include 'partials/device_status.html' %}
+    </div>
+</div>
+
+
+<script>
+
+
+function updateDeviceStatus() {
+    $.get("/api/device-status", function(data) {
+        $("#status-list").html(data);
+    });
+}
+
+// Ejecutar al cargar la página
+setInterval(updateDeviceStatus, 5000);
+</script>
+{% endblock %}

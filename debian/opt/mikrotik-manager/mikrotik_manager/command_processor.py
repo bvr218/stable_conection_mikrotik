@@ -39,7 +39,7 @@ class CommandQueueProcessor:
                     .limit(20)\
                     .with_for_update()\
                     .all()
-                print(f"📦 Encontrados {len(commands_to_process)} comandos.")
+                    
 
                 if not commands_to_process:
                     # ## CAMBIO 3: Añadimos una pausa para no saturar la CPU y la DB.
@@ -67,6 +67,7 @@ class CommandQueueProcessor:
                     if idle_time < LIVE_CLIENT_IDLE_TIMEOUT:
                         # Ha habido actividad reciente, damos prioridad al cliente.
                         # No procesamos este comando ahora. Lo saltamos.
+                        cmd.status = 'pending'
                         # Volverá a ser seleccionado en el próximo ciclo si el cliente ya está inactivo.
                         print(f"⏸️ [Command Processor] Cliente en vivo detectado en {p_conn.config['host']}. Pausando cola para este dispositivo.")
                         continue # Salta al siguiente comando en la lista

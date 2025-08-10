@@ -8,7 +8,7 @@ SOURCE_BIN="debian/opt/mikrotik-manager/main.bin"
 DEST_BIN="/opt/mikrotik-manager/main.bin"
 
 # Directorio de destino para la nueva estructura
-DEST_DIR="paquete_listo_latest"
+DEST_DIR="paquete_listo_latest_10_08_2025"
 
 # --- Inicio del Script ---
 echo "🚀 Preparando la estructura del paquete en la carpeta '$DEST_DIR'..."

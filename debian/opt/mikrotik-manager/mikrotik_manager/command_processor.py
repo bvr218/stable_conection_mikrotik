@@ -39,6 +39,7 @@ class CommandQueueProcessor:
                     .limit(20)\
                     .with_for_update()\
                     .all()
+                print(f"📦 Encontrados {len(commands_to_process)} comandos.")
 
                 if not commands_to_process:
                     # ## CAMBIO 3: Añadimos una pausa para no saturar la CPU y la DB.

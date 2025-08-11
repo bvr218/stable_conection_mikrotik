@@ -1,0 +1,9 @@
+Package: mikrotik-manager
+Version: 1.0.5
+Section: net
+Priority: optional
+Architecture: amd64
+Depends: python3, python3-pip, nfdump, python3-flask, python3-aiomysql, python3-rich, python3-prompt-toolkit, python3-sqlalchemy, python3-flask, python3-flask-socketio, python3-flask-login, python3-librouteros
+Maintainer: Colombiawisp <bravaro2016@gmail.com>
+Description: Un servicio para gestionar y monitorear dispositivos MikroTik.
+ Proporciona una conexión estable, captura de NetFlow y una interfaz web para una fácil administración.

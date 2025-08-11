@@ -1,0 +1,10 @@
+#!/bin/sh
+# prerm: se ejecuta antes de la eliminación del paquete.
+
+echo "Deteniendo el servicio mikrotik-manager..."
+systemctl stop mikrotik-manager.service
+
+echo "Deshabilitando el servicio mikrotik-manager..."
+systemctl disable mikrotik-manager.service
+
+exit 0

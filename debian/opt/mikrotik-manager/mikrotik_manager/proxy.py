@@ -232,6 +232,11 @@ class PersistentConnection:
                             
                         params[key] = value
 
+                if full_command_path == '/ping':
+                    # Se llaman directamente con el argumento 'cmd' y los parámetros
+                    result = self.api(cmd=full_command_path, **params)
+                    return list(result)
+
                 # --- INICIO: CÓDIGO PARA IMPRIMIR EL COMANDO ANTES DE ENVIAR ---
                 debug_command_parts = [full_command_path]
                 for key, value in params.items():
